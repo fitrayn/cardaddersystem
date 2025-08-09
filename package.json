@@ -1,0 +1,52 @@
+{
+  "name": "facebook-card-adder-system",
+  "version": "1.0.0",
+  "description": "نظام متكامل لإضافة وإدارة البطاقات",
+  "private": true,
+  "workspaces": [
+    "server",
+    "web"
+  ],
+  "scripts": {
+    "dev": "concurrently \"npm run dev:server\" \"npm run dev:web\"",
+    "dev:server": "cd server && npm run dev",
+    "dev:web": "cd web && npm run dev",
+    "build": "npm run build:server && npm run build:web",
+    "build:server": "cd server && npm run build",
+    "build:web": "cd web && npm run build",
+    "start": "concurrently \"npm run start:server\" \"npm run start:web\"",
+    "start:server": "cd server && npm run start",
+    "start:web": "cd web && npm run start",
+    "install:all": "npm install && cd server && npm install && cd ../web && npm install",
+    "clean": "rimraf server/dist web/.next web/out",
+    "lint": "npm run lint:server && npm run lint:web",
+    "lint:server": "cd server && npm run lint",
+    "lint:web": "cd web && npm run lint",
+    "setup:env": "copy env.example server\\.env && echo NEXT_PUBLIC_API_URL=http://localhost:4000 > web\\.env.local"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2",
+    "rimraf": "^5.0.5"
+  },
+  "keywords": [
+    "facebook",
+    "cards",
+    "adder",
+    "system",
+    "nextjs",
+    "fastify",
+    "typescript",
+    "mongodb-atlas"
+  ],
+  "author": "Your Name",
+  "license": "MIT",
+  "engines": {
+    "node": ">=18.0.0",
+    "npm": ">=8.0.0"
+  },
+  "dependencies": {
+    "nanoid": "^5.1.5",
+    "picocolors": "^1.1.1",
+    "source-map-js": "^1.2.1"
+  }
+}
