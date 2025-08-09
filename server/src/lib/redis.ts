@@ -5,7 +5,11 @@ let redis: Redis | null = null;
 
 export function getRedis(): Redis {
   if (!redis) {
-    redis = new Redis(env.REDIS_URL);
+    redis = new Redis(env.REDIS_URL, {
+      maxRetriesPerRequest: null,
+      enableReadyCheck: false,
+      lazyConnect: true
+    });
   }
   return redis;
 } 
