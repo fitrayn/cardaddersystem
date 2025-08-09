@@ -1,13 +1,12 @@
 import { Collection, ObjectId } from 'mongodb';
-import { getDatabase } from '../database';
+import { getDb } from '../mongo';
 import { User, CreateUserInput, UpdateUserInput, COLLECTIONS } from '../../types/database';
 import bcrypt from 'bcrypt';
 
 export class UserService {
-  private collection: Collection<User>;
-
-  constructor() {
-    this.collection = getDatabase().collection<User>(COLLECTIONS.USERS);
+  private async getCollection(): Promise<Collection<User>> {
+    const db = await getDb();
+    return db.collection<User>(COLLECTIONS.USERS);
   }
 
   async createUser(input: CreateUserInput): Promise<User> {
@@ -23,20 +22,24 @@ export class UserService {
       updatedAt: new Date(),
     };
 
-    const result = await this.collection.insertOne(user);
+    const collection = await this.getCollection();
+    const result = await collection.insertOne(user);
     return { ...user, _id: result.insertedId };
   }
 
   async findUserById(id: string): Promise<User | null> {
-    return this.collection.findOne({ _id: new ObjectId(id) });
+    const collection = await this.getCollection();
+    return collection.findOne({ _id: new ObjectId(id) });
   }
 
   async findUserByEmail(email: string): Promise<User | null> {
-    return this.collection.findOne({ email });
+    const collection = await this.getCollection();
+    return collection.findOne({ email });
   }
 
   async findUserByUsername(username: string): Promise<User | null> {
-    return this.collection.findOne({ username });
+    const collection = await this.getCollection();
+    return collection.findOne({ username });
   }
 
   async updateUser(id: string, input: UpdateUserInput): Promise<User | null> {
@@ -46,7 +49,8 @@ export class UserService {
       updateData.password = await bcrypt.hash(input.password, 12);
     }
 
-    await this.collection.updateOne(
+    const collection = await this.getCollection();
+    await collection.updateOne(
       { _id: new ObjectId(id) },
       { $set: updateData }
     );
@@ -55,12 +59,14 @@ export class UserService {
   }
 
   async deleteUser(id: string): Promise<boolean> {
-    const result = await this.collection.deleteOne({ _id: new ObjectId(id) });
+    const collection = await this.getCollection();
+    const result = await collection.deleteOne({ _id: new ObjectId(id) });
     return result.deletedCount > 0;
   }
 
   async listUsers(limit = 50, skip = 0): Promise<User[]> {
-    return this.collection
+    const collection = await this.getCollection();
+    return collection
       .find({})
       .sort({ createdAt: -1 })
       .skip(skip)
@@ -69,7 +75,8 @@ export class UserService {
   }
 
   async updateLastLogin(id: string): Promise<void> {
-    await this.collection.updateOne(
+    const collection = await this.getCollection();
+    await collection.updateOne(
       { _id: new ObjectId(id) },
       { $set: { lastLogin: new Date(), updatedAt: new Date() } }
     );
@@ -80,6 +87,7 @@ export class UserService {
   }
 
   async countUsers(): Promise<number> {
-    return this.collection.countDocuments();
+    const collection = await this.getCollection();
+    return collection.countDocuments();
   }
 } 
