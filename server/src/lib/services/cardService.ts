@@ -1,12 +1,11 @@
 import { Collection, ObjectId } from 'mongodb';
-import { getDatabase } from '../database';
+import { getDb } from '../mongo';
 import { Card, CreateCardInput, UpdateCardInput, COLLECTIONS } from '../../types/database';
 
 export class CardService {
-  private collection: Collection<Card>;
-
-  constructor() {
-    this.collection = getDatabase().collection<Card>(COLLECTIONS.CARDS);
+  private async getCollection(): Promise<Collection<Card>> {
+    const db = await getDb();
+    return db.collection<Card>(COLLECTIONS.CARDS);
   }
 
   async createCard(input: CreateCardInput): Promise<Card> {
@@ -24,50 +23,26 @@ export class CardService {
       updatedAt: new Date(),
     };
 
-    const result = await this.collection.insertOne(card);
+    const collection = await this.getCollection();
+    const result = await collection.insertOne(card);
     return { ...card, _id: result.insertedId };
   }
 
-  async createManyCards(inputs: CreateCardInput[]): Promise<Card[]> {
-    const cards: Omit<Card, '_id'>[] = inputs.map(input => ({
-      userId: new ObjectId(input.userId),
-      cardNumber: input.cardNumber,
-      cardType: input.cardType,
-      expiryMonth: input.expiryMonth,
-      expiryYear: input.expiryYear,
-      cvv: input.cvv,
-      cardholderName: input.cardholderName,
-      billingAddress: input.billingAddress,
-      isActive: true,
-      createdAt: new Date(),
-      updatedAt: new Date(),
-    }));
-
-    const result = await this.collection.insertMany(cards);
-    return cards.map((card, index) => ({ ...card, _id: result.insertedIds[index] }));
-  }
-
   async findCardById(id: string): Promise<Card | null> {
-    return this.collection.findOne({ _id: new ObjectId(id) });
-  }
-
-  async findCardsByUserId(userId: string, limit = 50, skip = 0): Promise<Card[]> {
-    return this.collection
-      .find({ userId: new ObjectId(userId) })
-      .sort({ createdAt: -1 })
-      .skip(skip)
-      .limit(limit)
-      .toArray();
+    const collection = await this.getCollection();
+    return collection.findOne({ _id: new ObjectId(id) });
   }
 
   async findCardByNumber(cardNumber: string): Promise<Card | null> {
-    return this.collection.findOne({ cardNumber });
+    const collection = await this.getCollection();
+    return collection.findOne({ cardNumber });
   }
 
   async updateCard(id: string, input: UpdateCardInput): Promise<Card | null> {
     const updateData = { ...input, updatedAt: new Date() };
 
-    await this.collection.updateOne(
+    const collection = await this.getCollection();
+    await collection.updateOne(
       { _id: new ObjectId(id) },
       { $set: updateData }
     );
@@ -76,57 +51,68 @@ export class CardService {
   }
 
   async deleteCard(id: string): Promise<boolean> {
-    const result = await this.collection.deleteOne({ _id: new ObjectId(id) });
+    const collection = await this.getCollection();
+    const result = await collection.deleteOne({ _id: new ObjectId(id) });
     return result.deletedCount > 0;
   }
 
-  async deleteCardsByUserId(userId: string): Promise<number> {
-    const result = await this.collection.deleteMany({ userId: new ObjectId(userId) });
-    return result.deletedCount;
-  }
-
-  async listCards(limit = 50, skip = 0): Promise<Card[]> {
-    return this.collection
-      .find({})
+  async listCards(limit = 50, skip = 0, country?: string): Promise<Card[]> {
+    const collection = await this.getCollection();
+    const filter = country ? { country } : {};
+    
+    return collection
+      .find(filter)
       .sort({ createdAt: -1 })
       .skip(skip)
       .limit(limit)
       .toArray();
   }
 
-  async countCardsByUserId(userId: string): Promise<number> {
-    return this.collection.countDocuments({ userId: new ObjectId(userId) });
-  }
+  async bulkCreateCards(cards: CreateCardInput[]): Promise<Card[]> {
+    const collection = await this.getCollection();
+    const cardsToInsert = cards.map(card => ({
+      userId: new ObjectId(card.userId),
+      cardNumber: card.cardNumber,
+      cardType: card.cardType,
+      expiryMonth: card.expiryMonth,
+      expiryYear: card.expiryYear,
+      cvv: card.cvv,
+      cardholderName: card.cardholderName,
+      billingAddress: card.billingAddress,
+      isActive: true,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    }));
 
-  async countActiveCardsByUserId(userId: string): Promise<number> {
-    return this.collection.countDocuments({ 
-      userId: new ObjectId(userId), 
-      isActive: true 
-    });
-  }
-
-  async updateLastUsed(id: string): Promise<void> {
-    await this.collection.updateOne(
-      { _id: new ObjectId(id) },
-      { $set: { lastUsed: new Date(), updatedAt: new Date() } }
-    );
+    const result = await collection.insertMany(cardsToInsert);
+    return Object.values(result.insertedIds).map((id, index) => ({
+      ...cardsToInsert[index],
+      _id: id,
+    })) as Card[];
   }
 
   async getCardsByCountry(country: string): Promise<Card[]> {
-    return this.collection
-      .find({ 'billingAddress.country': country })
-      .sort({ createdAt: -1 })
-      .toArray();
+    const collection = await this.getCollection();
+    return collection.find({ country, isActive: true }).toArray();
   }
 
-  async getTopCountries(): Promise<Array<{ country: string; count: number }>> {
-    const result = await this.collection.aggregate([
-      { $group: { _id: '$billingAddress.country', count: { $sum: 1 } } },
-      { $sort: { count: -1 } },
-      { $limit: 10 },
-      { $project: { country: '$_id', count: 1, _id: 0 } }
-    ]).toArray();
+  async countCards(country?: string): Promise<number> {
+    const collection = await this.getCollection();
+    const filter = country ? { country } : {};
+    return collection.countDocuments(filter);
+  }
 
-    return result as Array<{ country: string; count: number }>;
+  async getCountryStats(): Promise<{ country: string; count: number }[]> {
+    const collection = await this.getCollection();
+    const result = await collection
+      .aggregate([
+        { $match: { isActive: true } },
+        { $group: { _id: '$country', count: { $sum: 1 } } },
+        { $project: { country: '$_id', count: 1, _id: 0 } },
+        { $sort: { count: -1 } }
+      ])
+      .toArray();
+    
+    return result as { country: string; count: number }[];
   }
 } 

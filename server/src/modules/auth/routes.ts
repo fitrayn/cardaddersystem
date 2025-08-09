@@ -18,13 +18,14 @@ export async function authRoutes(app: any) {
     
     // Create new user
     const user = await userService.createUser({
-      username: body.email.split('@')[0], // Use email prefix as username
+      username: body.email.split('@')[0] ?? 'user', // Use email prefix as username
       email: body.email,
       password: body.password,
       role: body.role
     });
     
-    const token = signToken({ id: user._id?.toString() || '', role: user.role });
+    const userId = user._id?.toString() ?? 'unknown';
+    const token = signToken({ id: userId, role: user.role });
     return { token };
   });
 
@@ -40,9 +41,12 @@ export async function authRoutes(app: any) {
     if (!isValid) return reply.code(401).send({ error: 'Invalid credentials' });
     
     // Update last login
-    await userService.updateLastLogin(user._id?.toString() || '');
+    if (user._id) {
+      await userService.updateLastLogin(user._id.toString());
+    }
     
-    const token = signToken({ id: user._id?.toString() || '', role: user.role });
+    const userId = user._id?.toString() ?? 'unknown';
+    const token = signToken({ id: userId, role: user.role });
     return { token };
   });
 } 

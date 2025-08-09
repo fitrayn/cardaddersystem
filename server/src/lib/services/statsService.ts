@@ -1,12 +1,11 @@
 import { Collection, ObjectId } from 'mongodb';
-import { getDatabase } from '../database';
+import { getDb } from '../mongo';
 import { Stats, StatsSummary, COLLECTIONS } from '../../types/database';
 
 export class StatsService {
-  private collection: Collection<Stats>;
-
-  constructor() {
-    this.collection = getDatabase().collection<Stats>(COLLECTIONS.STATS);
+  private async getCollection(): Promise<Collection<Stats>> {
+    const db = await getDb();
+    return db.collection<Stats>(COLLECTIONS.STATS);
   }
 
   async createStats(userId: string, date: Date): Promise<Stats> {
@@ -24,7 +23,8 @@ export class StatsService {
       updatedAt: new Date(),
     };
 
-    const result = await this.collection.insertOne(stats);
+    const collection = await this.getCollection();
+    const result = await collection.insertOne(stats);
     return { ...stats, _id: result.insertedId };
   }
 
@@ -35,7 +35,8 @@ export class StatsService {
     const endOfDay = new Date(date);
     endOfDay.setHours(23, 59, 59, 999);
 
-    return this.collection.findOne({
+    const collection = await this.getCollection();
+    return collection.findOne({
       userId: new ObjectId(userId),
       date: { $gte: startOfDay, $lte: endOfDay }
     });
@@ -48,9 +49,10 @@ export class StatsService {
     const endOfDay = new Date(date);
     endOfDay.setHours(23, 59, 59, 999);
 
+    const collection = await this.getCollection();
     const updateData = { ...updates, updatedAt: new Date() };
 
-    await this.collection.updateOne(
+    await collection.updateOne(
       {
         userId: new ObjectId(userId),
         date: { $gte: startOfDay, $lte: endOfDay }
@@ -68,7 +70,8 @@ export class StatsService {
     const endOfDay = new Date(date);
     endOfDay.setHours(23, 59, 59, 999);
 
-    await this.collection.updateOne(
+    const collection = await this.getCollection();
+    await collection.updateOne(
       {
         userId: new ObjectId(userId),
         date: { $gte: startOfDay, $lte: endOfDay }
@@ -81,7 +84,7 @@ export class StatsService {
   }
 
   async getStatsSummary(): Promise<StatsSummary> {
-    const db = getDatabase();
+    const db = await getDb();
     
     // Get total users
     const totalUsers = await db.collection(COLLECTIONS.USERS).countDocuments();
@@ -102,9 +105,9 @@ export class StatsService {
       }
     ]).toArray();
 
-    const totalJobs = jobStats.reduce((sum, stat) => sum + stat.count, 0);
-    const completedJobs = jobStats.find(stat => stat._id === 'completed')?.count || 0;
-    const failedJobs = jobStats.find(stat => stat._id === 'failed')?.count || 0;
+    const totalJobs = jobStats.reduce((sum: number, stat: any) => sum + stat.count, 0);
+    const completedJobs = jobStats.find((stat: any) => stat._id === 'completed')?.count || 0;
+    const failedJobs = jobStats.find((stat: any) => stat._id === 'failed')?.count || 0;
 
     // Get top countries
     const topCountries = await db.collection(COLLECTIONS.CARDS).aggregate([
@@ -140,7 +143,8 @@ export class StatsService {
     startDate.setDate(startDate.getDate() - days);
     startDate.setHours(0, 0, 0, 0);
 
-    return this.collection
+    const collection = await this.getCollection();
+    return collection
       .find({
         userId: new ObjectId(userId),
         date: { $gte: startDate }
@@ -163,7 +167,8 @@ export class StatsService {
     startDate.setDate(startDate.getDate() - days);
     startDate.setHours(0, 0, 0, 0);
 
-    const result = await this.collection.aggregate([
+    const collection = await this.getCollection();
+    const result = await collection.aggregate([
       { $match: { date: { $gte: startDate } } },
       {
         $group: {
@@ -180,7 +185,7 @@ export class StatsService {
       { $sort: { _id: 1 } }
     ]).toArray();
 
-    return result.map(item => ({
+    return result.map((item: any) => ({
       date: item._id,
       totalCards: item.totalCards,
       activeCards: item.activeCards,

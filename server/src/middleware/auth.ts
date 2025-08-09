@@ -19,7 +19,7 @@ export async function requireAuth(request: any, reply: any) {
   }
 }
 
-export function requireRole(role: 'admin' | 'user') {
+export function requireRole(role: 'admin' | 'user' | 'operator') {
   return async (request: any, reply: any) => {
     await requireAuth(request, reply);
     const user = request.user as UserToken | undefined;
