@@ -11,6 +11,7 @@
     "rootDir": "src",
     "resolveJsonModule": true,
     "types": ["node"],
+    "typeRoots": ["./node_modules/@types"],
     "noUncheckedIndexedAccess": true,
     "downlevelIteration": true
   },
