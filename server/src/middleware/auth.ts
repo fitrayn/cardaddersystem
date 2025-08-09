@@ -1,7 +1,7 @@
 import jwt from 'jsonwebtoken';
 import { env } from '../config/env';
 
-export type UserToken = { id: string; role: 'admin' | 'operator' };
+export type UserToken = { id: string; role: 'admin' | 'user' };
 
 export function signToken(payload: UserToken): string {
   return jwt.sign(payload, env.JWT_SECRET, { expiresIn: '7d' });
@@ -19,7 +19,7 @@ export async function requireAuth(request: any, reply: any) {
   }
 }
 
-export function requireRole(role: 'admin' | 'operator') {
+export function requireRole(role: 'admin' | 'user') {
   return async (request: any, reply: any) => {
     await requireAuth(request, reply);
     const user = request.user as UserToken | undefined;
