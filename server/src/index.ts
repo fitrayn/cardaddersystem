@@ -5,6 +5,7 @@ import cors from '@fastify/cors';
 import rateLimit from '@fastify/rate-limit';
 import cookie from '@fastify/cookie';
 import { env } from './config/env';
+import { connectToDatabase } from './lib/database';
 import { authRoutes } from './modules/auth/routes';
 import { uploadRoutes } from './modules/uploads/routes';
 import { jobRoutes } from './modules/jobs/routes';
@@ -30,6 +31,17 @@ app.get('/health', async () => ({
   version: '1.0.0',
   environment: env.NODE_ENV
 }));
+
+// Initialize database connection
+app.addHook('onReady', async () => {
+  try {
+    await connectToDatabase();
+    app.log.info('✅ Database connected successfully');
+  } catch (error) {
+    app.log.error('❌ Failed to connect to database:', error);
+    process.exit(1);
+  }
+});
 
 app.register(authRoutes);
 app.register(uploadRoutes);
