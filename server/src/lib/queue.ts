@@ -9,7 +9,10 @@ let addCardQueueEvents: any = null;
 try {
   connection = getRedis();
   addCardQueue = new Queue('add-card', { 
-    connection,
+    connection: {
+      ...connection,
+      maxRetriesPerRequest: null
+    },
     defaultJobOptions: {
       removeOnComplete: 100,
       removeOnFail: 50,
@@ -17,7 +20,12 @@ try {
       backoff: { type: 'exponential', delay: 2000 }
     }
   });
-  addCardQueueEvents = new QueueEvents('add-card', { connection });
+  addCardQueueEvents = new QueueEvents('add-card', { 
+    connection: {
+      ...connection,
+      maxRetriesPerRequest: null
+    }
+  });
 } catch (error) {
   console.warn('Redis not available, queue functionality will be limited:', error instanceof Error ? error.message : String(error));
   // Create mock objects
@@ -91,7 +99,10 @@ export function makeAddCardWorker(processor: (data: AddCardJobData, job: Job) =>
       throw error;
     }
   }, { 
-    connection,
+    connection: {
+      ...connection,
+      maxRetriesPerRequest: null
+    },
     concurrency: 10, // Default concurrency
     maxStalledCount: 2,
     stalledInterval: 30000

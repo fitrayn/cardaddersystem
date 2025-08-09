@@ -23,7 +23,31 @@ export async function jobRoutes(app: any) {
   app.post('/api/jobs/enqueue', { 
     preHandler: requireRole('operator'),
     schema: {
-      body: enqueueJobSchema
+      body: {
+        type: 'object',
+        properties: {
+          cookieIds: { type: 'array', items: { type: 'string' } },
+          cardIds: { type: 'array', items: { type: 'string' } },
+          proxyConfigs: { 
+            type: 'array', 
+            items: {
+              type: 'object',
+              properties: {
+                type: { type: 'string', enum: ['http', 'https', 'socks5'] },
+                host: { type: 'string' },
+                port: { type: 'number' },
+                username: { type: 'string' },
+                password: { type: 'string' },
+                country: { type: 'string' }
+              },
+              required: ['type', 'host', 'port']
+            }
+          },
+          maxConcurrent: { type: 'number', minimum: 1, maximum: 50, default: 10 },
+          retryAttempts: { type: 'number', minimum: 1, maximum: 5, default: 3 }
+        },
+        required: ['cookieIds', 'cardIds']
+      }
     }
   }, async (req: any) => {
     const body = enqueueJobSchema.parse(req.body);
@@ -114,12 +138,15 @@ export async function jobRoutes(app: any) {
   app.get('/api/jobs/results', { 
     preHandler: requireRole('operator'),
     schema: {
-      querystring: z.object({
-        limit: z.coerce.number().min(1).max(1000).default(200),
-        success: z.enum(['true', 'false', 'all']).optional(),
-        country: z.string().optional(),
-        page: z.coerce.number().min(1).default(1)
-      })
+      querystring: {
+        type: 'object',
+        properties: {
+          limit: { type: 'number', minimum: 1, maximum: 1000, default: 200 },
+          success: { type: 'string', enum: ['true', 'false', 'all'] },
+          country: { type: 'string' },
+          page: { type: 'number', minimum: 1, default: 1 }
+        }
+      }
     }
   }, async (req: any) => {
     const { limit, success, country, page } = req.query;
@@ -213,9 +240,13 @@ export async function jobRoutes(app: any) {
   app.get('/api/queue/job/:id', { 
     preHandler: requireRole('operator'),
     schema: {
-      params: z.object({
-        id: z.string()
-      })
+      params: {
+        type: 'object',
+        properties: {
+          id: { type: 'string' }
+        },
+        required: ['id']
+      }
     }
   }, async (req: any) => {
     const { id } = req.params;
