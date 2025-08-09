@@ -13,7 +13,7 @@
     "dev:web": "cd web && npm run dev",
     "build": "npm run build:server && npm run build:web",
     "build:server-only": "cd server && npm install && npm run build && ls -la dist/",
-    "build:server": "cd server && npm install && cp ../env.production .env && npm run build && ls -la dist/",
+    "build:server": "cd server && npm install && cp ../env.production .env && echo 'REDIS_URL=redis://default:AbzFAAIjcDFhODA5YjljYWIzZDU0Zjk0YmVkYzNlMjhmMDFmN2IyMXAxMA@crisp-marten-48325.upstash.io:6379' >> .env && npm run build && ls -la dist/",
     "build:web": "cd web && npm install && cp env.local .env.local && npm run build",
     "build:web-only": "cd web && npm install && cp env.local .env.local && npm run build",
     "start": "concurrently \"npm run start:server\" \"npm run start:web\"",
