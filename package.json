@@ -15,6 +15,7 @@
     "build:server": "cd server && npm run build",
     "build:web": "cd web && npm run build",
     "start": "concurrently \"npm run start:server\" \"npm run start:web\"",
+    "start:prod": "npm run start:server",
     "start:server": "cd server && npm run start",
     "start:web": "cd web && npm run start",
     "install:all": "npm install && cd server && npm install && cd ../web && npm install",
@@ -25,7 +26,6 @@
     "setup:env": "copy env.example server\\.env && echo NEXT_PUBLIC_API_URL=http://localhost:4000 > web\\.env.local"
   },
   "devDependencies": {
-    "concurrently": "^8.2.2",
     "rimraf": "^5.0.5"
   },
   "keywords": [
@@ -47,6 +47,7 @@
   "dependencies": {
     "nanoid": "^5.1.5",
     "picocolors": "^1.1.1",
-    "source-map-js": "^1.2.1"
+    "source-map-js": "^1.2.1",
+    "concurrently": "^8.2.2"
   }
 }
