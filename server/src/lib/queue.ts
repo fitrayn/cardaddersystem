@@ -22,7 +22,10 @@ if (!env.REDIS_URL) {
     clean: () => Promise.resolve(),
     getJob: () => Promise.resolve(null)
   };
-  addCardQueueEvents = {};
+  addCardQueueEvents = {
+    on: () => {},
+    off: () => {},
+  } as any;
 } else {
   try {
     connection = getRedis();
@@ -53,8 +56,15 @@ if (!env.REDIS_URL) {
       clean: () => Promise.resolve(),
       getJob: () => Promise.resolve(null)
     };
-    addCardQueueEvents = {};
+    addCardQueueEvents = {
+      on: () => {},
+      off: () => {},
+    } as any;
   }
+}
+
+export function getQueueEvents() {
+  return addCardQueueEvents as QueueEvents;
 }
 
 // Enhanced job data interface

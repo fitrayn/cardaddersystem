@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { apiClient } from '../../lib/api';
 import { useAuth } from '../../lib/auth-context';
 import Link from 'next/link';
@@ -15,10 +15,18 @@ type EnqueueMappedResponse = { enqueued: number; jobs: Array<{ cookieId: string;
 
 type ProgressResponse = { results: Record<string, { progress: number; status: string } | null> };
 
+// Toasts
+type Toast = { id: string; type: 'success' | 'error' | 'info'; message: string };
+
 export default function LinkingPage() {
-  const { user, isLoading } = useAuth();
+  const { user, isLoading, token } = useAuth() as any;
 
   const [cookies, setCookies] = useState<CookieRow[]>([]);
+  const [cookiesTotal, setCookiesTotal] = useState<number>(0);
+  const [page, setPage] = useState<number>(1);
+  const [limit, setLimit] = useState<number>(50);
+  const [search, setSearch] = useState<string>('');
+
   const [selectedCookieIds, setSelectedCookieIds] = useState<string[]>([]);
   const [servers, setServers] = useState<ServerItem[]>([]);
   const [selectedServerIds, setSelectedServerIds] = useState<string[]>([]);
@@ -38,23 +46,50 @@ export default function LinkingPage() {
 
   const [busy, setBusy] = useState(false);
   const pollRef = useRef<NodeJS.Timeout | null>(null);
+  const sseAbortRef = useRef<AbortController | null>(null);
+
+  const [toasts, setToasts] = useState<Toast[]>([]);
+
+  // Templates (localStorage)
+  type Template = { name: string; bin: string; country: string; expStart?: string; expEnd?: string; serverIds: string[] };
+  const [templates, setTemplates] = useState<Template[]>([]);
+  const [templateName, setTemplateName] = useState('');
 
   useEffect(() => {
-    if (!user && !isLoading) {
-      // Not logged in; show limited UI
-    }
-  }, [user, isLoading]);
+    try {
+      const raw = localStorage.getItem('linking_templates');
+      if (raw) setTemplates(JSON.parse(raw));
+    } catch {}
+  }, []);
+
+  const saveTemplates = (list: Template[]) => {
+    setTemplates(list);
+    try { localStorage.setItem('linking_templates', JSON.stringify(list)); } catch {}
+  };
+
+  const addToast = (type: Toast['type'], message: string) => {
+    const id = String(Date.now() + Math.random());
+    setToasts(prev => [...prev, { id, type, message }]);
+    setTimeout(() => setToasts(prev => prev.filter(t => t.id !== id)), 4000);
+  };
 
   useEffect(() => {
-    // Load cookies
+    // Load cookies with pagination
     (async () => {
       try {
-        const res = await apiClient.get<{ items: CookieRow[]; total: number; page: number; limit: number }>(`/api/cookies?limit=1000&page=1`);
-        setCookies(res.items || []);
+        const res = await apiClient.get<{ items: CookieRow[]; total: number; page: number; limit: number }>(`/api/cookies?limit=${limit}&page=${page}`);
+        const items = res.items || [];
+        const filtered = search ? items.filter(i => (i.c_user || '').includes(search)) : items;
+        setCookies(filtered);
+        setCookiesTotal(res.total || filtered.length);
       } catch (e) {
         console.error('Failed to load cookies', e);
+        addToast('error', 'فشل تحميل الكوكيز');
       }
     })();
+  }, [page, limit, search]);
+
+  useEffect(() => {
     // Load available servers
     (async () => {
       try {
@@ -91,7 +126,7 @@ export default function LinkingPage() {
 
   const generateCards = async () => {
     if (!bin || (selectedCookieIds.length === 0)) {
-      alert('أدخل BIN وحدد الكوكيز أولاً');
+      addToast('info', 'أدخل BIN وحدد الكوكيز أولاً');
       return;
     }
     setBusy(true);
@@ -102,21 +137,77 @@ export default function LinkingPage() {
       const res = await apiClient.post<GenerateTempResponse>(`/api/cards/generate-temp`, payload);
       setBatchId(res.batchId);
       setPreview(res.preview || []);
+      addToast('success', 'تم توليد البطاقات المؤقتة');
     } catch (e) {
       console.error(e);
-      alert('فشل توليد البطاقات');
+      addToast('error', 'فشل توليد البطاقات');
     } finally {
       setBusy(false);
     }
   };
 
+  // Options
+  const [rateLimitPerServer, setRateLimitPerServer] = useState<number>(10);
+  const [healthCheck, setHealthCheck] = useState<boolean>(true);
+
+  const startSSE = useCallback(async (mapping: Record<string, string>) => {
+    // Close previous
+    try { if (sseAbortRef.current) sseAbortRef.current.abort(); } catch {}
+
+    const ctrl = new AbortController();
+    sseAbortRef.current = ctrl;
+
+    try {
+      const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000'}/api/jobs/events`, {
+        method: 'GET',
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+        signal: ctrl.signal as any,
+      });
+      if (!res.ok || !res.body) {
+        addToast('error', 'تعذر الاشتراك بتقدم المهام');
+        return;
+      }
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder('utf-8');
+      let buffer = '';
+      const pump = async () => {
+        const { done, value } = await reader.read();
+        if (done) return;
+        buffer += decoder.decode(value, { stream: true });
+        const parts = buffer.split('\n\n');
+        buffer = parts.pop() || '';
+        for (const chunk of parts) {
+          if (chunk.startsWith('event: progress')) {
+            const dataLine = chunk.split('\n').find(l => l.startsWith('data: '));
+            if (dataLine) {
+              try {
+                const payload = JSON.parse(dataLine.slice(6));
+                const { jobId, progress, status } = payload;
+                // Map jobId -> cookieId
+                const cookieId = Object.entries(mapping).find(([, jid]) => jid === String(jobId))?.[0];
+                if (cookieId) {
+                  setProgressMap(prev => ({ ...prev, [cookieId]: typeof progress === 'number' ? progress : (prev[cookieId] || 0) }));
+                  setStatusMap(prev => ({ ...prev, [cookieId]: status || prev[cookieId] || 'unknown' }));
+                }
+              } catch {}
+            }
+          }
+        }
+        await pump();
+      };
+      pump();
+    } catch (e) {
+      console.error('SSE error', e);
+    }
+  }, [token]);
+
   const startLinking = async () => {
     if (!batchId) {
-      alert('يرجى توليد البطاقات أولاً');
+      addToast('info', 'يرجى توليد البطاقات أولاً');
       return;
     }
     if (selectedCookieIds.length === 0) {
-      alert('يرجى تحديد الكوكيز');
+      addToast('info', 'يرجى تحديد الكوكيز');
       return;
     }
     if (selectedServerIds.length === 0) {
@@ -129,6 +220,8 @@ export default function LinkingPage() {
         batchId,
         cookieIds: selectedCookieIds,
         serverIds: selectedServerIds,
+        rateLimitPerServer,
+        healthCheck,
       });
       const mapping: Record<string, string> = {};
       res.jobs.forEach(j => { mapping[j.cookieId] = j.jobId; });
@@ -139,116 +232,151 @@ export default function LinkingPage() {
       selectedCookieIds.forEach(cid => { initProgress[cid] = 0; initStatus[cid] = 'waiting'; });
       setProgressMap(initProgress);
       setStatusMap(initStatus);
-      // Start polling
-      if (pollRef.current) clearInterval(pollRef.current);
-      pollRef.current = setInterval(async () => {
-        const jobIds = Object.values(mapping).filter(Boolean);
-        if (jobIds.length === 0) return;
-        try {
-          const pr = await apiClient.post<ProgressResponse>(`/api/jobs/progress`, { jobIds });
-          const newProgress = { ...progressMap };
-          const newStatus = { ...statusMap };
-          for (const [jobId, info] of Object.entries(pr.results || {})) {
-            if (!info) continue;
-            // find cookie for this jobId
-            const cookieId = Object.entries(mapping).find(([, jid]) => jid === jobId)?.[0];
-            if (!cookieId) continue;
-            newProgress[cookieId] = typeof info.progress === 'number' ? info.progress : newProgress[cookieId] || 0;
-            newStatus[cookieId] = info.status || newStatus[cookieId] || 'unknown';
-          }
-          setProgressMap(newProgress);
-          setStatusMap(newStatus);
-        } catch (e) {
-          console.error('poll error', e);
-        }
-      }, 2500) as any;
+      // Stop old polling if any
+      if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; }
+      // Start SSE subscription
+      startSSE(mapping);
+      addToast('success', `تم بدء الربط لعدد ${res.enqueued}`);
     } catch (e) {
       console.error(e);
-      alert('فشل بدء عملية الربط');
+      addToast('error', 'فشل بدء عملية الربط');
     } finally {
       setBusy(false);
     }
   };
 
   useEffect(() => {
-    return () => { if (pollRef.current) clearInterval(pollRef.current); };
+    return () => {
+      if (pollRef.current) clearInterval(pollRef.current);
+      try { if (sseAbortRef.current) sseAbortRef.current.abort(); } catch {}
+    };
   }, []);
 
   const assignedLast4 = (idx: number) => preview[idx]?.last4 || '';
 
+  const totalPages = Math.max(1, Math.ceil(cookiesTotal / limit));
+
+  const applyTemplate = (tpl: Template) => {
+    setBin(tpl.bin);
+    setCountry(tpl.country || 'US');
+    setExpStart(tpl.expStart || '');
+    setExpEnd(tpl.expEnd || '');
+    setSelectedServerIds(tpl.serverIds || []);
+    addToast('success', `تم تطبيق القالب: ${tpl.name}`);
+  };
+
+  const saveCurrentAsTemplate = () => {
+    if (!templateName.trim()) { addToast('info', 'أدخل اسمًا للقالب'); return; }
+    const tpl: Template = { name: templateName.trim(), bin, country, expStart, expEnd, serverIds: selectedServerIds };
+    const list = [...templates.filter(t => t.name !== tpl.name), tpl];
+    saveTemplates(list);
+    setTemplateName('');
+    addToast('success', 'تم حفظ القالب');
+  };
+
   return (
-    <div className="min-h-screen p-4 md:p-6">
+    <div className="min-h-screen">
+      {/* Toasts */}
+      <div className="fixed bottom-4 right-4 space-y-2 z-50">
+        {toasts.map(t => (
+          <div key={t.id} className={`px-4 py-2 rounded shadow text-white ${t.type === 'success' ? 'bg-green-600' : t.type === 'error' ? 'bg-red-600' : 'bg-blue-600'}`}>{t.message}</div>
+        ))}
+      </div>
+
       <div className="flex items-center justify-between mb-4">
-        <h1 className="text-2xl font-bold">بدء المهام (ربط بطاقة واحدة لكل كوكيز)</h1>
-        <Link href="/" className="text-blue-600 hover:underline">الرجوع</Link>
+        <h1 className="text-2xl font-bold text-slate-800">بدء المهام (ربط بطاقة واحدة لكل كوكيز)</h1>
+        <Link href="/" className="text-blue-700 hover:underline">الرجوع</Link>
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
-        <div className="p-4 rounded-lg border border-gray-200 bg-white/70">
-          <h2 className="font-semibold mb-3">اختيار السيرفرات</h2>
+        <div className="p-4 rounded-lg border border-slate-200 bg-white">
+          <h2 className="font-semibold mb-3 text-slate-800">اختيار السيرفرات</h2>
           <div className="space-y-2 max-h-56 overflow-auto">
             {servers.map(s => (
-              <label key={s._id} className="flex items-center gap-2">
+              <label key={s._id} className="flex items-center gap-2 text-slate-700">
                 <input type="checkbox" checked={selectedServerIds.includes(String(s._id))} onChange={() => toggleServer(String(s._id))} />
                 <span>{s.name}</span>
               </label>
             ))}
-            {servers.length === 0 && <div className="text-sm text-gray-500">لا توجد سيرفرات متاحة</div>}
+            {servers.length === 0 && <div className="text-sm text-slate-500">لا توجد سيرفرات متاحة</div>}
+          </div>
+          <div className="mt-3 grid grid-cols-2 gap-2 text-sm">
+            <label className="flex items-center justify-between gap-2 text-slate-700"><span>Rate/server</span><input className="w-20 border rounded px-2 py-1" type="number" min={1} max={100} value={rateLimitPerServer} onChange={e => setRateLimitPerServer(Number(e.target.value || 1))} /></label>
+            <label className="flex items-center gap-2 text-slate-700"><input type="checkbox" checked={healthCheck} onChange={e => setHealthCheck(e.target.checked)} /> صحة السيرفر</label>
+          </div>
+          <div className="mt-4">
+            <h3 className="font-medium mb-2 text-slate-800">القوالب</h3>
+            <div className="flex items-center gap-2 mb-2">
+              <input className="flex-1 border rounded px-3 py-1 text-sm" placeholder="اسم القالب" value={templateName} onChange={e => setTemplateName(e.target.value)} />
+              <button className="px-3 py-1 rounded bg-gray-800 text-white text-sm" onClick={saveCurrentAsTemplate}>حفظ</button>
+            </div>
+            <div className="space-y-1 max-h-32 overflow-auto text-sm">
+              {templates.map(tpl => (
+                <div key={tpl.name} className="flex items-center justify-between">
+                  <button className="text-blue-700 hover:underline" onClick={() => applyTemplate(tpl)}>{tpl.name}</button>
+                  <button className="text-red-600" onClick={() => saveTemplates(templates.filter(x => x.name !== tpl.name))}>حذف</button>
+                </div>
+              ))}
+              {templates.length === 0 && <div className="text-gray-500">لا توجد قوالب محفوظة</div>}
+            </div>
           </div>
         </div>
 
-        <div className="p-4 rounded-lg border border-gray-200 bg-white/70">
-          <h2 className="font-semibold mb-3">توليد البطاقات (مؤقتًا)</h2>
+        <div className="p-4 rounded-lg border border-slate-200 bg-white">
+          <h2 className="font-semibold mb-3 text-slate-800">توليد البطاقات (مؤقتًا)</h2>
           <div className="space-y-3">
             <div>
-              <label className="block text-sm">BIN</label>
+              <label className="block text-sm text-slate-700">BIN</label>
               <input className="w-full border rounded px-3 py-2" placeholder="مثال: 411111" value={bin} onChange={(e) => setBin(e.target.value)} />
             </div>
             <div>
-              <label className="block text-sm">العدد (يساوي عدد الكوكيز المحددة)</label>
+              <label className="block text-sm text-slate-700">العدد (يساوي عدد الكوكيز المحددة)</label>
               <input className="w-full border rounded px-3 py-2" type="number" readOnly value={quantity} />
             </div>
             <div className="grid grid-cols-2 gap-3">
               <div>
-                <label className="block text-sm">الدولة</label>
+                <label className="block text-sm text-slate-700">الدولة</label>
                 <input className="w-full border rounded px-3 py-2" value={country} onChange={(e) => setCountry(e.target.value)} />
               </div>
               <div>
-                <label className="block text-sm">Exp Start (YYYY-MM)</label>
+                <label className="block text-sm text-slate-700">Exp Start (YYYY-MM)</label>
                 <input className="w-full border rounded px-3 py-2" placeholder="2026-01" value={expStart} onChange={(e) => setExpStart(e.target.value)} />
               </div>
               <div>
-                <label className="block text-sm">Exp End (YYYY-MM)</label>
+                <label className="block text-sm text-slate-700">Exp End (YYYY-MM)</label>
                 <input className="w-full border rounded px-3 py-2" placeholder="2029-12" value={expEnd} onChange={(e) => setExpEnd(e.target.value)} />
               </div>
             </div>
-            <button disabled={busy} onClick={generateCards} className="px-4 py-2 rounded bg-blue-600 text-white disabled:opacity-50">توليد البطاقات</button>
+            <button disabled={busy} onClick={generateCards} className="px-4 py-2 rounded bg-blue-600 text-white disabled:opacity-50 hover:bg-blue-700">توليد البطاقات</button>
             {batchId && (
               <div className="text-sm text-green-700">تم التوليد. Batch: {batchId} (عدد {preview.length})</div>
             )}
           </div>
         </div>
 
-        <div className="p-4 rounded-lg border border-gray-200 bg-white/70">
-          <h2 className="font-semibold mb-3">التحكم</h2>
+        <div className="p-4 rounded-lg border border-slate-200 bg-white">
+          <h2 className="font-semibold mb-3 text-slate-800">التحكم</h2>
           <div className="space-y-3">
-            <button disabled={!batchId || selectedCookieIds.length === 0 || busy} onClick={startLinking} className="px-4 py-2 rounded bg-green-600 text-white disabled:opacity-50">بدء الربط</button>
-            <div className="text-xs text-gray-600">اختر سيرفرات متعددة ليتم التوزيع عليها بالترتيب (Round-robin)</div>
+            <button disabled={!batchId || selectedCookieIds.length === 0 || busy} onClick={startLinking} className="px-4 py-2 rounded bg-green-600 text-white disabled:opacity-50 hover:bg-green-700">بدء الربط</button>
+            <div className="text-xs text-slate-600">اختر سيرفرات متعددة ليتم التوزيع عليها بالترتيب (Round-robin)</div>
           </div>
         </div>
       </div>
 
-      <div className="p-4 rounded-lg border border-gray-200 bg-white/70">
+      <div className="p-4 rounded-lg border border-slate-200 bg-white">
         <div className="flex items-center justify-between mb-3">
-          <h2 className="font-semibold">الكوكيز</h2>
-          <label className="flex items-center gap-2 text-sm">
-            <input type="checkbox" checked={allSelected} onChange={toggleSelectAll} /> تحديد الكل
-          </label>
+          <h2 className="font-semibold text-slate-800">الكوكيز</h2>
+          <div className="flex items-center gap-3 text-sm">
+            <label className="flex items-center gap-2 text-slate-700"><span>بحث</span><input className="border rounded px-2 py-1" placeholder="c_user" value={search} onChange={e => setSearch(e.target.value)} /></label>
+            <label className="flex items-center gap-2 text-slate-700"><span>صفحة</span><input className="w-16 border rounded px-2 py-1" type="number" min={1} max={totalPages} value={page} onChange={e => setPage(Math.max(1, Math.min(Number(e.target.value || 1), totalPages)))} /></label>
+            <label className="flex items-center gap-2 text-slate-700"><span>عدد/صفحة</span><select className="border rounded px-2 py-1" value={limit} onChange={e => setLimit(Number(e.target.value))}><option value={25}>25</option><option value={50}>50</option><option value={100}>100</option></select></label>
+            <label className="flex items-center gap-2 text-slate-700"><input type="checkbox" checked={allSelected} onChange={toggleSelectAll} /> تحديد الكل</label>
+          </div>
         </div>
         <div className="overflow-auto">
           <table className="min-w-full text-sm">
             <thead>
-              <tr className="bg-gray-100">
+              <tr className="bg-slate-100">
                 <th className="p-2">تحديد</th>
                 <th className="p-2">Cookie ID</th>
                 <th className="p-2">c_user</th>
@@ -276,10 +404,10 @@ export default function LinkingPage() {
                     <td className="p-2">{batchId ? (last4 ? `**** **** **** ${last4}` : '-') : '-'}</td>
                     <td className="p-2">{serverName || '-'}</td>
                     <td className="p-2">
-                      <div className="w-40 bg-gray-200 rounded h-2 overflow-hidden">
+                      <div className="w-40 bg-slate-200 rounded h-2 overflow-hidden">
                         <div className="bg-blue-600 h-2" style={{ width: `${prog}%` }} />
                       </div>
-                      <div className="text-xs text-gray-600 mt-1">{prog}%</div>
+                      <div className="text-xs text-slate-600 mt-1">{prog}%</div>
                     </td>
                     <td className="p-2 text-xs">{status}</td>
                   </tr>
@@ -287,6 +415,11 @@ export default function LinkingPage() {
               })}
             </tbody>
           </table>
+        </div>
+        <div className="flex items-center justify-end gap-2 mt-3 text-sm">
+          <button className="px-3 py-1 border rounded" onClick={() => setPage(p => Math.max(1, p - 1))}>السابق</button>
+          <span>{page} / {totalPages}</span>
+          <button className="px-3 py-1 border rounded" onClick={() => setPage(p => Math.min(totalPages, p + 1))}>التالي</button>
         </div>
       </div>
     </div>

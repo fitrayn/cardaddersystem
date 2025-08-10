@@ -1,9 +1,10 @@
 import type { FastifyInstance } from 'fastify';
 import { requireRole } from '../../middleware/auth';
-import { enqueueAddCardJob, getQueueStats, pauseQueue, resumeQueue, clearQueue, getJobDetails } from '../../lib/queue';
+import { enqueueAddCardJob, getQueueStats, pauseQueue, resumeQueue, clearQueue, getJobDetails, getQueueEvents } from '../../lib/queue';
 import { getDb } from '../../lib/mongo';
 import { z } from 'zod';
 import { getRedis } from '../../lib/redis';
+import { ServerService } from '../servers/service';
 
 const enqueueJobSchema = z.object({
   cookieIds: z.array(z.string()),
@@ -19,6 +20,24 @@ const enqueueJobSchema = z.object({
   maxConcurrent: z.number().min(1).max(50).default(10),
   retryAttempts: z.number().min(1).max(5).default(3)
 });
+
+const tempBatchSchema = z.object({
+  bin: z.string().regex(/^[0-9]{6,8}$/),
+  quantity: z.number().min(1).max(10000),
+  country: z.string().optional(),
+  expStart: z.string().regex(/^\d{4}-\d{2}$/).optional(),
+  expEnd: z.string().regex(/^\d{4}-\d{2}$/).optional(),
+});
+
+const enqueueMappedSchema = z.object({
+  batchId: z.string().min(1),
+  cookieIds: z.array(z.string().min(1)).min(1),
+  serverIds: z.array(z.string().min(1)).optional().default([]),
+  rateLimitPerServer: z.number().min(1).max(100).optional().default(10),
+  healthCheck: z.boolean().optional().default(true),
+});
+
+const progressSchema = z.object({ jobIds: z.array(z.string().min(1)).min(1) });
 
 export async function jobRoutes(app: any) {
   app.post('/api/jobs/enqueue', { 
@@ -150,11 +169,10 @@ export async function jobRoutes(app: any) {
 
   // Generate temporary cards (not stored in DB) and store in Redis with TTL
   app.post('/api/cards/generate-temp', { preHandler: requireRole('operator') }, async (req: any, reply: any) => {
-    const body = (req.body || {}) as { bin: string; quantity: number; country?: string; expStart?: string; expEnd?: string };
-    const bin = String(body.bin || '').replace(/\D/g, '').slice(0, 8);
-    const quantity = Math.max(1, Math.min(Number(body.quantity || 0), 10000));
-    if (bin.length < 6) return reply.code(400).send({ error: 'Invalid BIN' });
-    if (!quantity) return reply.code(400).send({ error: 'Invalid quantity' });
+    const parsed = tempBatchSchema.safeParse(req.body || {});
+    if (!parsed.success) return reply.code(400).send({ error: 'Invalid payload', details: parsed.error.issues });
+    const body = parsed.data;
+    const bin = String(body.bin).replace(/\D/g, '').slice(0, 8);
 
     function luhnCheck(num: string) {
       let sum = 0, alt = false;
@@ -172,10 +190,8 @@ export async function jobRoutes(app: any) {
     const start = body.expStart ? new Date(body.expStart + '-01') : new Date(now.getFullYear() + 1, 0, 1);
     const end = body.expEnd ? new Date(body.expEnd + '-01') : new Date(now.getFullYear() + 4, 11, 1);
 
-    for (let i = 0; i < quantity; i++) {
-      // generate PAN with BIN + random and fix with Luhn
+    for (let i = 0; i < body.quantity; i++) {
       let pan = bin + randomDigits(Math.max(12 - bin.length, 0));
-      // adjust last digit to satisfy luhn if needed by brute force last digit 0-9
       let panCandidate = pan + '0';
       for (let d = 0; d <= 9; d++) {
         panCandidate = pan + String(d);
@@ -193,11 +209,10 @@ export async function jobRoutes(app: any) {
     const redis = getRedis();
     try {
       if ((redis as any)?.status === 'mock') {
-        // fallback to in-memory on single instance
         (global as any).__TEMP_CARDS__ = (global as any).__TEMP_CARDS__ || new Map<string, any>();
         (global as any).__TEMP_CARDS__.set(batchId, cards);
       } else {
-        await (redis as any).setex(`temp:cards:${batchId}`, 600, JSON.stringify(cards));
+        await (redis as any).setex(`temp:cards:${batchId}`, 300, JSON.stringify(cards)); // 5 min TTL
       }
     } catch (e) {
       return reply.code(500).send({ error: 'Failed to store temporary cards' });
@@ -213,13 +228,25 @@ export async function jobRoutes(app: any) {
     return { batchId, count: cards.length, preview };
   });
 
-  // Enqueue mapped jobs using a temp batch: one card per cookie in order, round-robin servers
-  app.post('/api/jobs/enqueue-mapped', { preHandler: requireRole('operator') }, async (req: any, reply: any) => {
-    const body = (req.body || {}) as { batchId: string; cookieIds: string[]; serverIds: string[] };
-    const { batchId, cookieIds = [], serverIds = [] } = body;
-    if (!batchId || !Array.isArray(cookieIds) || cookieIds.length === 0) {
-      return reply.code(400).send({ error: 'batchId and cookieIds required' });
+  // Cleanup temp batch
+  app.delete('/api/cards/generate-temp/:batchId', { preHandler: requireRole('operator') }, async (req: any) => {
+    const { batchId } = req.params as { batchId: string };
+    const redis = getRedis();
+    if ((redis as any)?.status === 'mock') {
+      const map = (global as any).__TEMP_CARDS__ as Map<string, any> | undefined;
+      map?.delete(batchId);
+    } else {
+      await (redis as any).del(`temp:cards:${batchId}`);
     }
+    return { deleted: true };
+  });
+
+  // Enqueue mapped jobs using a temp batch: one card per cookie in order, round-robin servers, with optional health check and per-server rate-limit
+  app.post('/api/jobs/enqueue-mapped', { preHandler: requireRole('operator') }, async (req: any, reply: any) => {
+    const parsed = enqueueMappedSchema.safeParse(req.body || {});
+    if (!parsed.success) return reply.code(400).send({ error: 'Invalid payload', details: parsed.error.issues });
+    const { batchId, cookieIds, serverIds, rateLimitPerServer, healthCheck } = parsed.data;
+
     const redis = getRedis();
     let cards: any[] | null = null;
     try {
@@ -235,14 +262,38 @@ export async function jobRoutes(app: any) {
     }
     if (!cards || cards.length === 0) return reply.code(400).send({ error: 'No cards for this batchId' });
 
+    // Optional health-check: filter only healthy servers
+    const serversToUse: string[] = Array.isArray(serverIds) && serverIds.length > 0 ? serverIds : [];
+    let healthyServers: string[] = serversToUse;
+    if (healthCheck && serversToUse.length > 0) {
+      const checks = await Promise.all(serversToUse.map(async (sid) => {
+        try { const ok = await ServerService.healthCheck(sid); return ok ? sid : null; } catch { return null; }
+      }));
+      healthyServers = checks.filter((x): x is string => !!x);
+      if (healthyServers.length === 0) return reply.code(503).send({ error: 'No healthy servers available' });
+    }
+
+    // Rate limiting per server via token bucket in memory (simple best-effort). For distributed, use Redis LUA.
+    const perServerCounters = new Map<string, number>();
+
     const jobs: { cookieId: string; jobId: string }[] = [];
-    const servers = Array.isArray(serverIds) && serverIds.length > 0 ? serverIds : [undefined as any];
+    const servers = healthyServers.length > 0 ? healthyServers : [undefined as any];
 
     const pairs = Math.min(cookieIds.length, cards.length);
     for (let i = 0; i < pairs; i++) {
       const cookieId = String(cookieIds[i]);
       const card = cards[i];
       const serverId = servers[i % servers.length];
+
+      if (serverId) {
+        const used = perServerCounters.get(serverId) || 0;
+        if (used >= rateLimitPerServer) {
+          // skip enqueue for this server turn; push to next healthy server slot
+          continue;
+        }
+        perServerCounters.set(serverId, used + 1);
+      }
+
       const job = await enqueueAddCardJob({
         cookieId,
         cardData: card,
@@ -251,13 +302,64 @@ export async function jobRoutes(app: any) {
       jobs.push({ cookieId, jobId: String((job as any).id || '') });
     }
 
+    // Cleanup temp batch after enqueue
+    try {
+      if ((redis as any)?.status === 'mock') {
+        const map = (global as any).__TEMP_CARDS__ as Map<string, any> | undefined;
+        map?.delete(batchId);
+      } else {
+        await (redis as any).del(`temp:cards:${batchId}`);
+      }
+    } catch {}
+
     return { enqueued: jobs.length, jobs };
   });
 
-  // Fetch progress for a list of jobIds
-  app.post('/api/jobs/progress', { preHandler: requireRole('operator') }, async (req: any) => {
-    const body = (req.body || {}) as { jobIds: string[] };
-    const jobIds = Array.isArray(body.jobIds) ? body.jobIds : [];
+  // SSE: subscribe to job progress events in real-time
+  app.get('/api/jobs/events', { preHandler: requireRole('operator') }, async (req: any, reply: any) => {
+    reply.raw.setHeader('Content-Type', 'text/event-stream');
+    reply.raw.setHeader('Cache-Control', 'no-cache');
+    reply.raw.setHeader('Connection', 'keep-alive');
+    reply.raw.flushHeaders?.();
+
+    const events = getQueueEvents();
+
+    const onProgress = async ({ jobId, data, returnvalue, prev, opts, } : any) => {
+      const job = await getJobDetails(String(jobId));
+      const payload = JSON.stringify({ jobId: String(jobId), progress: job?.progress ?? 0, status: job?.status ?? 'unknown' });
+      reply.raw.write(`event: progress\n`);
+      reply.raw.write(`data: ${payload}\n\n`);
+    };
+
+    const onCompleted = async ({ jobId }: any) => {
+      const payload = JSON.stringify({ jobId: String(jobId), progress: 100, status: 'completed' });
+      reply.raw.write(`event: progress\n`);
+      reply.raw.write(`data: ${payload}\n\n`);
+    };
+
+    const onFailed = async ({ jobId }: any) => {
+      const payload = JSON.stringify({ jobId: String(jobId), progress: -1, status: 'failed' });
+      reply.raw.write(`event: progress\n`);
+      reply.raw.write(`data: ${payload}\n\n`);
+    };
+
+    (events as any).on('progress', onProgress);
+    (events as any).on('completed', onCompleted);
+    (events as any).on('failed', onFailed);
+
+    req.raw.on('close', () => {
+      (events as any).off('progress', onProgress);
+      (events as any).off('completed', onCompleted);
+      (events as any).off('failed', onFailed);
+      reply.raw.end();
+    });
+  });
+
+  // Existing progress endpoint with schema
+  app.post('/api/jobs/progress', { preHandler: requireRole('operator') }, async (req: any, reply: any) => {
+    const parsed = progressSchema.safeParse(req.body || {});
+    if (!parsed.success) return reply.code(400).send({ error: 'Invalid payload', details: parsed.error.issues });
+    const jobIds = parsed.data.jobIds;
     const results: Record<string, any> = {};
     for (const id of jobIds) {
       const info = await getJobDetails(id);
