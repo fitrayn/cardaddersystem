@@ -216,24 +216,42 @@ async function fetchPrimaryAdAccountId(cookie: FacebookCookieData, agent: any, a
 }
 
 async function fetchTokensFromUrl(url: string, cookie: FacebookCookieData, agent: any, acceptLanguage?: string, userAgent?: string): Promise<Partial<SessionTokens>> {
+  const u = new URL(url);
+  const isBusiness = /(^|\.)business\.facebook\.com$/i.test(u.host);
+  const origin = isBusiness ? FB_ORIGIN : `https://www.facebook.com`;
   const headers = {
     'User-Agent': userAgent || env.FB_USER_AGENT,
     'Accept-Language': acceptLanguage || env.FB_ACCEPT_LANGUAGE,
     'Cookie': buildCookieHeader(cookie),
+    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+    'Connection': 'keep-alive',
+    'Referer': origin,
+    'Origin': origin,
+    ...(isBusiness ? {
+      'Sec-Fetch-Site': 'same-origin',
+      'Sec-Fetch-Mode': 'navigate',
+      'Sec-Fetch-Dest': 'document',
+    } : {}),
+    'Upgrade-Insecure-Requests': '1',
   } as Record<string, string>;
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), 9000);
   try {
-    const resp = await axios.get(url, {
-      headers,
-      httpsAgent: agent,
-      httpAgent: agent,
-      signal: controller.signal as any,
-      timeout: 12000,
-      maxRedirects: 0,
-      validateStatus: (s) => s >= 200 && s < 400,
-    });
-    const html = typeof resp.data === 'string' ? resp.data : '';
+    let html = '';
+    try {
+      const resp = await axios.get(url, {
+        headers,
+        httpsAgent: agent,
+        httpAgent: agent,
+        signal: controller.signal as any,
+        timeout: 12000,
+        maxRedirects: 0,
+        validateStatus: (s) => s >= 200 && s < 500,
+      });
+      html = typeof resp.data === 'string' ? resp.data : '';
+    } catch {
+      html = '';
+    }
     const out: Partial<SessionTokens> = {};
     let match = html.match(/name=\"fb_dtsg\"\s+value=\"([^\"]+)\"/);
     if (match) out.fbDtsg = match[1];
@@ -266,7 +284,12 @@ async function fetchSessionTokens(cookie: FacebookCookieData, agent: any, accept
     FB_BILLING_URL,
     'https://business.facebook.com/business_locations',
     'https://business.facebook.com/adsmanager/manage/billing_settings',
-    'https://business.facebook.com/ads/manager/billing/transactions/'
+    'https://business.facebook.com/ads/manager/billing/transactions/',
+    // WWW fallbacks
+    'https://www.facebook.com/billing/payment_methods',
+    'https://www.facebook.com/business_locations',
+    'https://www.facebook.com/adsmanager/manage/billing_settings',
+    'https://www.facebook.com/ads/manager/billing/transactions/',
   ];
   for (const url of candidateUrls) {
     const tokens = await fetchTokensFromUrl(url, cookie, agent, acceptLanguage, userAgent);
