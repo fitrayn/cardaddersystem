@@ -52,7 +52,6 @@ export default function Dashboard() {
     apiUrl: '',
     description: '',
   });
-
   const cardsFileRef = useRef<HTMLInputElement>(null);
   const cookiesFileRef = useRef<HTMLInputElement>(null);
 
@@ -64,6 +63,22 @@ export default function Dashboard() {
   const [cookiesLimit, setCookiesLimit] = useState<number | ''>('');
   const [cookiesDefaultCountry, setCookiesDefaultCountry] = useState('US');
 
+  // Logs modal state
+  const [showLogs, setShowLogs] = useState(false);
+  const [logsServerId, setLogsServerId] = useState<string>('');
+  const [logs, setLogs] = useState<Array<{ _id: string; success: boolean; reason?: string; country?: string | null; createdAt: string }>>([]);
+  const [logsLoading, setLogsLoading] = useState(false);
+  const [logsError, setLogsError] = useState<string | null>(null);
+  const [logsTimer, setLogsTimer] = useState<number | null>(null);
+
+  // Data management modal state
+  const [showDataManager, setShowDataManager] = useState(false);
+  const [dataTab, setDataTab] = useState<'cards' | 'cookies'>('cards');
+  const [cardsList, setCardsList] = useState<any[]>([]);
+  const [cookiesList, setCookiesList] = useState<any[]>([]);
+  const [dataLoading, setDataLoading] = useState(false);
+  const [dataError, setDataError] = useState<string | null>(null);
+
   useEffect(() => {
     checkServerConnection();
     if (user) {
@@ -71,6 +86,90 @@ export default function Dashboard() {
       fetchServers();
     }
   }, [user]);
+
+  // Poll logs when modal open
+  useEffect(() => {
+    if (!showLogs || !logsServerId) {
+      if (logsTimer) {
+        window.clearInterval(logsTimer);
+        setLogsTimer(null);
+      }
+      return;
+    }
+    // immediate fetch
+    void fetchLogs();
+    const t = window.setInterval(fetchLogs, 3000);
+    setLogsTimer(t as number);
+    return () => {
+      clearInterval(t);
+      setLogsTimer(null);
+    };
+  }, [showLogs, logsServerId]);
+
+  const fetchLogs = async () => {
+    if (!logsServerId) return;
+    try {
+      setLogsLoading(true);
+      setLogsError(null);
+      const qs = `?serverId=${encodeURIComponent(logsServerId)}&limit=50`;
+      const resp = await apiClient.get<{ items: any[]; total: number }>(`/api/jobs/logs${qs}`);
+      setLogs((resp.items || []).map((x: any) => ({
+        _id: String(x._id),
+        success: !!x.success,
+        reason: x.reason,
+        country: x.country ?? null,
+        createdAt: x.createdAt,
+      })));
+    } catch (err) {
+      setLogsError(err instanceof Error ? err.message : 'فشل جلب اللوجز');
+    } finally {
+      setLogsLoading(false);
+    }
+  };
+
+  const fetchCards = async () => {
+    try {
+      setDataLoading(true);
+      setDataError(null);
+      const resp = await apiClient.get<{ items: any[]; total: number }>(`/api/cards?limit=100`);
+      setCardsList(resp.items || []);
+    } catch (err) {
+      setDataError(err instanceof Error ? err.message : 'فشل جلب البطاقات');
+    } finally {
+      setDataLoading(false);
+    }
+  };
+
+  const fetchCookies = async () => {
+    try {
+      setDataLoading(true);
+      setDataError(null);
+      const resp = await apiClient.get<{ items: any[]; total: number }>(`/api/cookies?limit=100`);
+      setCookiesList(resp.items || []);
+    } catch (err) {
+      setDataError(err instanceof Error ? err.message : 'فشل جلب الكوكيز');
+    } finally {
+      setDataLoading(false);
+    }
+  };
+
+  const deleteCard = async (id: string) => {
+    try {
+      await apiClient.delete(`/api/cards/${id}`);
+      setCardsList(prev => prev.filter((x) => String(x._id) !== id));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'فشل حذف البطاقة');
+    }
+  };
+
+  const deleteCookie = async (id: string) => {
+    try {
+      await apiClient.delete(`/api/cookies/${id}`);
+      setCookiesList(prev => prev.filter((x) => String(x._id) !== id));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'فشل حذف الكوكي');
+    }
+  };
 
   const checkServerConnection = async () => {
     try {
@@ -271,7 +370,9 @@ export default function Dashboard() {
       });
       const result = response as { enqueued: number };
       setMessage(`تم بدء المهام بنجاح! تم إضافة ${result.enqueued} مهمة.`);
-      setSelectedServerId('');
+      // open logs for selected server
+      setLogsServerId(selectedServerId);
+      setShowLogs(true);
       fetchStats(); // Refresh stats
     } catch (err) {
       setError(err instanceof Error ? err.message : 'فشل بدء المهام');
@@ -549,6 +650,32 @@ export default function Dashboard() {
             </button>
           </div>
 
+          {/* Logs Card */}
+          <div className="bg-gray-800/50 backdrop-blur-sm rounded-lg border border-gray-600 p-6 hover:border-lime-400 transition-all duration-300 hover:scale-105 group">
+            <div className="text-lime-400 text-3xl mb-4">📜</div>
+            <h3 className="text-xl font-semibold text-gray-200 mb-2">عرض اللوجز</h3>
+            <p className="text-gray-400 mb-4">متابعة نتائج الربط حسب السيرفر</p>
+            <button 
+              onClick={() => { setLogsServerId(selectedServerId || servers[0]?._id || ''); setShowLogs(true); }}
+              className="bg-lime-600 hover:bg-lime-700 text-white font-medium py-2 px-4 rounded-md transition-all duration-300 hover:scale-105"
+            >
+              فتح اللوجز
+            </button>
+          </div>
+
+          {/* Data Manager Card */}
+          <div className="bg-gray-800/50 backdrop-blur-sm rounded-lg border border-gray-600 p-6 hover:border-yellow-400 transition-all duration-300 hover:scale-105 group">
+            <div className="text-yellow-400 text-3xl mb-4">🗂️</div>
+            <h3 className="text-xl font-semibold text-gray-200 mb-2">إدارة البيانات</h3>
+            <p className="text-gray-400 mb-4">عرض/حذف البطاقات والكوكيز</p>
+            <button 
+              onClick={() => { setShowDataManager(true); setDataTab('cards'); fetchCards(); fetchCookies(); }}
+              className="bg-yellow-600 hover:bg-yellow-700 text-white font-medium py-2 px-4 rounded-md transition-all duration-300 hover:scale-105"
+            >
+              فتح الإدارة
+            </button>
+          </div>
+
           <div className="bg-gray-800/50 backdrop-blur-sm rounded-lg border border-gray-600 p-6 hover:border-blue-400 transition-all duration-300 hover:scale-105 group">
             <div className="text-blue-400 text-3xl mb-4">📤</div>
             <h3 className="text-xl font-semibold text-gray-200 mb-2">رفع البطاقات</h3>
@@ -790,6 +917,125 @@ export default function Dashboard() {
                 >
                   إلغاء
                 </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Logs Modal */}
+        {showLogs && (
+          <div className="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+            <div className="bg-gray-800/90 backdrop-blur-sm rounded-lg p-6 w-full max-w-2xl border border-gray-600">
+              <h3 className="text-xl font-semibold text-gray-200 mb-4">اللوجز</h3>
+
+              <div className="mb-4 flex gap-3 items-center">
+                <label className="text-sm text-gray-300">السيرفر:</label>
+                <select
+                  value={logsServerId}
+                  onChange={(e) => setLogsServerId(e.target.value)}
+                  className="p-2 bg-gray-700 text-gray-200 border border-gray-600 rounded-md"
+                >
+                  <option value="">اختر السيرفر</option>
+                  {servers.map(s => (
+                    <option key={s._id} value={s._id}>{s.name}</option>
+                  ))}
+                </select>
+                <button onClick={fetchLogs} className="bg-blue-600 hover:bg-blue-700 text-white text-sm py-2 px-3 rounded">تحديث</button>
+              </div>
+
+              {logsError && <div className="mb-3 text-red-400 text-sm">{logsError}</div>}
+
+              <div className="max-h-80 overflow-y-auto space-y-2">
+                {logsLoading && <div className="text-gray-400">جاري التحميل...</div>}
+                {!logsLoading && logs.length === 0 && <div className="text-gray-400">لا توجد سجلات</div>}
+                {logs.map(item => (
+                  <div key={item._id} className="p-3 rounded border border-gray-600 bg-gray-700/50 flex justify-between items-center">
+                    <div>
+                      <div className={item.success ? 'text-green-400' : 'text-red-400'}>
+                        {item.success ? 'ناجح' : 'فشل'} - {item.reason || (item.success ? 'تمت الإضافة' : 'غير معروف')}
+                      </div>
+                      <div className="text-xs text-gray-400">{new Date(item.createdAt).toLocaleString('ar-SA')} {item.country ? `- ${item.country}` : ''}</div>
+                    </div>
+                    <div className={`w-2 h-2 rounded-full ${item.success ? 'bg-green-500' : 'bg-red-500'}`} />
+                  </div>
+                ))}
+              </div>
+
+              <div className="flex gap-2 mt-6 justify-end">
+                <button onClick={() => setShowLogs(false)} className="bg-gray-600 hover:bg-gray-700 text-white font-medium py-2 px-4 rounded-md">إغلاق</button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Data Manager Modal */}
+        {showDataManager && (
+          <div className="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+            <div className="bg-gray-800/90 backdrop-blur-sm rounded-lg p-6 w-full max-w-3xl border border-gray-600">
+              <h3 className="text-xl font-semibold text-gray-200 mb-4">إدارة البيانات</h3>
+
+              <div className="flex gap-3 mb-4">
+                <button onClick={() => setDataTab('cards')} className={`py-2 px-3 rounded ${dataTab==='cards' ? 'bg-blue-600 text-white' : 'bg-gray-700 text-gray-200'}`}>البطاقات</button>
+                <button onClick={() => setDataTab('cookies')} className={`py-2 px-3 rounded ${dataTab==='cookies' ? 'bg-blue-600 text-white' : 'bg-gray-700 text-gray-200'}`}>الكوكيز</button>
+                <button onClick={() => { if (dataTab==='cards') fetchCards(); else fetchCookies(); }} className="ml-auto bg-blue-600 hover:bg-blue-700 text-white text-sm py-2 px-3 rounded">تحديث</button>
+              </div>
+
+              {dataError && <div className="mb-3 text-red-400 text-sm">{dataError}</div>}
+
+              <div className="max-h-96 overflow-y-auto">
+                {dataLoading && <div className="text-gray-400">جاري التحميل...</div>}
+
+                {dataTab==='cards' && !dataLoading && (
+                  <table className="w-full text-sm text-gray-300">
+                    <thead>
+                      <tr className="text-left text-gray-400">
+                        <th className="p-2">ID</th>
+                        <th className="p-2">تاريخ الإضافة</th>
+                        <th className="p-2">إجراءات</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {cardsList.map((c: any) => (
+                        <tr key={String(c._id)} className="border-t border-gray-700">
+                          <td className="p-2 font-mono text-xs">{String(c._id)}</td>
+                          <td className="p-2">{c.createdAt ? new Date(c.createdAt).toLocaleString('ar-SA') : '-'}</td>
+                          <td className="p-2">
+                            <button onClick={() => deleteCard(String(c._id))} className="bg-red-600 hover:bg-red-700 text-white text-xs py-1 px-2 rounded">حذف</button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
+
+                {dataTab==='cookies' && !dataLoading && (
+                  <table className="w-full text-sm text-gray-300">
+                    <thead>
+                      <tr className="text-left text-gray-400">
+                        <th className="p-2">ID</th>
+                        <th className="p-2">c_user</th>
+                        <th className="p-2">تاريخ الإضافة</th>
+                        <th className="p-2">إجراءات</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {cookiesList.map((c: any) => (
+                        <tr key={String(c._id)} className="border-t border-gray-700">
+                          <td className="p-2 font-mono text-xs">{String(c._id)}</td>
+                          <td className="p-2">{c.c_user || '-'}</td>
+                          <td className="p-2">{c.createdAt ? new Date(c.createdAt).toLocaleString('ar-SA') : '-'}</td>
+                          <td className="p-2">
+                            <button onClick={() => deleteCookie(String(c._id))} className="bg-red-600 hover:bg-red-700 text-white text-xs py-1 px-2 rounded">حذف</button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
+              </div>
+
+              <div className="flex gap-2 mt-6 justify-end">
+                <button onClick={() => setShowDataManager(false)} className="bg-gray-600 hover:bg-gray-700 text-white font-medium py-2 px-4 rounded-md">إغلاق</button>
               </div>
             </div>
           </div>
