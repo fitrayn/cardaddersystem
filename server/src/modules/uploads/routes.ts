@@ -21,6 +21,15 @@ export async function uploadRoutes(app: any) {
     return { inserted: docs.length };
   });
 
+  app.post('/api/upload/cards/json', { preHandler: requireRole('operator') }, async (req: any, reply: any) => {
+    const body = req.body as any[];
+    const items = z.array(cardSchema).parse(body);
+    const db = await getDb();
+    const docs = items.map((i) => ({ payload: encryptJson(i), createdAt: new Date() }));
+    await db.collection('cards').insertMany(docs);
+    return { inserted: docs.length };
+  });
+
   app.post('/api/upload/cookies/csv', { preHandler: requireRole('operator') }, async (req: any, reply: any) => {
     const parts = req.parts();
     for await (const part of parts) {
