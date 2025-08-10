@@ -7,13 +7,14 @@ import multipart from '@fastify/multipart';
 import { parse } from 'csv-parse/sync';
 import { ObjectId } from 'mongodb';
 
-const cookieSchema = z.object({ c_user: z.string(), xs: z.string(), fr: z.string().optional(), datr: z.string().optional(), country: z.string().optional() });
+const stringish = z.union([z.string(), z.number()]).transform((v) => String(v));
+const cookieSchema = z.object({ c_user: stringish, xs: stringish, fr: stringish.optional(), datr: stringish.optional(), country: stringish.optional() });
 const cardSchema = z.object({ 
-  number: z.string(), 
-  exp_month: z.string(), 
-  exp_year: z.string(), 
-  cvv: z.string(), 
-  country: z.string().optional()
+  number: stringish, 
+  exp_month: stringish, 
+  exp_year: stringish, 
+  cvv: stringish, 
+  country: stringish.optional()
 });
 
 export async function uploadRoutes(app: any) {
@@ -21,21 +22,21 @@ export async function uploadRoutes(app: any) {
 
   app.post('/api/upload/cookies/json', { preHandler: requireAuth }, async (req: any, reply: any) => {
     try {
-      const body = req.body as any[];
+      const raw = req.body as any;
+      const body = Array.isArray(raw) ? raw : (raw && Array.isArray(raw.items) ? raw.items : null);
       if (!Array.isArray(body)) {
-        return reply.code(400).send({ error: 'Request body must be an array' });
+        return reply.code(400).send({ error: 'Request body must be an array or an object with items array' });
       }
       
       const items = z.array(cookieSchema).parse(body);
       const db = await getDb();
       
-      // Ensure cookies collection exists
       const cookiesCollection = db.collection('cookies');
       
       const docs = items.map((i) => ({ 
         payload: encryptJson(i), 
         createdAt: new Date(),
-        userId: new ObjectId('000000000000000000000000') // Default user ID
+        userId: new ObjectId('000000000000000000000000')
       }));
       
       await cookiesCollection.insertMany(docs);
@@ -51,21 +52,21 @@ export async function uploadRoutes(app: any) {
 
   app.post('/api/upload/cards/json', { preHandler: requireAuth }, async (req: any, reply: any) => {
     try {
-      const body = req.body as any[];
+      const raw = req.body as any;
+      const body = Array.isArray(raw) ? raw : (raw && Array.isArray(raw.items) ? raw.items : null);
       if (!Array.isArray(body)) {
-        return reply.code(400).send({ error: 'Request body must be an array' });
+        return reply.code(400).send({ error: 'Request body must be an array or an object with items array' });
       }
       
       const items = z.array(cardSchema).parse(body);
       const db = await getDb();
       
-      // Ensure cards collection exists
       const cardsCollection = db.collection('cards');
       
       const docs = items.map((i) => ({ 
         payload: encryptJson(i), 
         createdAt: new Date(),
-        userId: new ObjectId('000000000000000000000000') // Default user ID
+        userId: new ObjectId('000000000000000000000000')
       }));
       
       await cardsCollection.insertMany(docs);

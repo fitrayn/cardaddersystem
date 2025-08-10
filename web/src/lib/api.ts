@@ -66,7 +66,10 @@ export class ApiClient {
       const response = await fetch(url, config);
       
       if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
+        let details: any = null;
+        try { details = await response.json(); } catch {}
+        const msg = `HTTP error! status: ${response.status}` + (details ? ` - ${JSON.stringify(details)}` : '');
+        throw new Error(msg);
       }
       
       return await response.json();
