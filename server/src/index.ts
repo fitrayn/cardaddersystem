@@ -49,8 +49,35 @@ app.register(cors, {
   },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Origin', 'Accept'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Origin', 'Accept', 'Cache-Control'],
   exposedHeaders: ['Content-Range', 'X-Content-Range'],
+  preflightContinue: false,
+  optionsSuccessStatus: 204
+});
+
+// Global OPTIONS handler for all routes to ensure CORS preflight works
+app.options('*', async (req: any, reply: any) => {
+  const origin = req.headers?.origin as string | undefined;
+  const allowedOrigins = [
+    'http://localhost:3000',
+    'http://localhost:3001',
+    'https://elaborate-youtiao-1fc402.netlify.app',
+    'https://cardaddersystem.netlify.app',
+    'https://cardaddersystem.vercel.app'
+  ];
+  
+  if (origin && allowedOrigins.includes(origin)) {
+    reply.header('Access-Control-Allow-Origin', origin);
+    reply.header('Vary', 'Origin');
+  } else if (env.NODE_ENV === 'development') {
+    reply.header('Access-Control-Allow-Origin', '*');
+  }
+  
+  reply.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, PATCH, OPTIONS');
+  reply.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With, Origin, Accept, Cache-Control');
+  reply.header('Access-Control-Allow-Credentials', 'true');
+  reply.header('Access-Control-Max-Age', '86400');
+  reply.code(204).send();
 });
 app.register(cookie);
 app.register(rateLimit, {
