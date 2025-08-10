@@ -117,14 +117,14 @@ async function httpGet(url: string, cookie: FacebookCookieData, agent?: any, ref
     'Sec-Fetch-Dest': 'document',
   } as Record<string, string>;
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 10000);
+  const timeoutId = setTimeout(() => controller.abort(), 15000);
   try {
     const resp = await axios.get(url, {
       headers,
       httpsAgent: agent,
       httpAgent: agent,
       signal: controller.signal as any,
-      timeout: 12000,
+      timeout: 20000,
       validateStatus: (s) => s >= 200 && s < 500,
       maxRedirects: 0,
     });
@@ -134,21 +134,49 @@ async function httpGet(url: string, cookie: FacebookCookieData, agent?: any, ref
   }
 }
 
-async function fetchFbDtsg(cookie: FacebookCookieData, agent?: any, acceptLang?: string): Promise<string | null> {
+async function fetchFbDtsg(cookie: FacebookCookieData, agent?: any, acceptLang?: string): Promise<{ token?: string; sourceUrl?: string; debugInfo: string[] }> {
   // Warm up: hit home to establish session context
   try { await httpGet(FB_HOME_URL, cookie, agent, undefined, acceptLang); } catch {}
 
   const tryPages = [
+    // Business primary endpoints
     { url: FB_BILLING_URL, referer: FB_HOME_URL },
     { url: FB_SETTINGS_PAYMENTS_URL, referer: FB_HOME_URL },
     { url: 'https://business.facebook.com/adsmanager/manage/', referer: FB_HOME_URL },
+    { url: 'https://business.facebook.com/adsmanager', referer: FB_HOME_URL },
+    { url: 'https://business.facebook.com/ads/manager/billing/transactions', referer: FB_HOME_URL },
+    { url: 'https://business.facebook.com/ads/manager/account_settings/account_billing', referer: FB_HOME_URL },
+    { url: 'https://business.facebook.com/settings?tab=business_tools', referer: FB_HOME_URL },
+    { url: 'https://business.facebook.com/settings?tab=people', referer: FB_HOME_URL },
+    { url: 'https://business.facebook.com/settings?tab=business_info', referer: FB_HOME_URL },
+    { url: 'https://business.facebook.com/business_locations', referer: FB_HOME_URL },
+    { url: 'https://business.facebook.com/events_manager2/list/pixel', referer: FB_HOME_URL },
+    { url: 'https://business.facebook.com/commerce_manager', referer: FB_HOME_URL },
+
+    // www.facebook variants
+    { url: 'https://www.facebook.com/settings?tab=payments', referer: 'https://www.facebook.com/' },
+    { url: 'https://www.facebook.com/adsmanager/manage/', referer: 'https://www.facebook.com/' },
+    { url: 'https://www.facebook.com/adsmanager', referer: 'https://www.facebook.com/' },
+    { url: 'https://www.facebook.com/ads/manager/billing/transactions', referer: 'https://www.facebook.com/' },
+
+    // m.facebook mobile endpoints
+    { url: 'https://m.facebook.com/settings?tab=payments', referer: 'https://m.facebook.com/' },
+    { url: 'https://m.facebook.com/adsmanager', referer: 'https://m.facebook.com/' },
     { url: 'https://m.facebook.com/business', referer: 'https://m.facebook.com/' },
+
+    // mbasic (very lightweight)
+    { url: 'https://mbasic.facebook.com/settings?tab=payments', referer: 'https://mbasic.facebook.com/' },
+    { url: 'https://mbasic.facebook.com/adsmanager', referer: 'https://mbasic.facebook.com/' },
+
+    // Fallback generic homes
+    { url: 'https://www.facebook.com/', referer: undefined as any },
+    { url: FB_HOME_URL, referer: undefined as any },
   ];
 
   let debugInfo: string[] = [];
   for (const entry of tryPages) {
     try {
-      const resp = await httpGet(entry.url, cookie, agent, entry.referer, acceptLang);
+      const resp = await httpGet(entry.url, cookie, agent, entry.referer as any, acceptLang);
       const status = resp.status;
       const location = (resp.headers as any)?.location as string | undefined;
       
@@ -163,7 +191,7 @@ async function fetchFbDtsg(cookie: FacebookCookieData, agent?: any, acceptLang?:
       const token = extractFbDtsgFromHtml(html);
       if (token) {
         console.log(`✅ fb_dtsg found on ${entry.url}`);
-        return token;
+        return { token, sourceUrl: entry.url, debugInfo };
       }
       
       // Log partial HTML content for debugging (first 500 chars)
@@ -188,7 +216,7 @@ async function fetchFbDtsg(cookie: FacebookCookieData, agent?: any, acceptLang?:
   
   // Log all debug info when no token found
   console.log(`❌ fb_dtsg not found. Debug info:\n${debugInfo.join('\n')}`);
-  return null;
+  return { debugInfo };
 }
 
 function buildGraphQLPayload(cookie: FacebookCookieData, card: FacebookCardData, fbDtsg: string) {
@@ -231,7 +259,7 @@ function buildGraphQLPayload(cookie: FacebookCookieData, card: FacebookCardData,
   return formData;
 }
 
-async function prepareSession(cookie: FacebookCookieData, agent?: any, acceptLang?: string): Promise<string> {
+async function prepareSession(cookie: FacebookCookieData, agent?: any, acceptLang?: string): Promise<{ token: string; sourceUrl: string | null; debugLogs: string[] }> {
   // Basic cookie validation
   if (!cookie.c_user || !cookie.xs) {
     throw new Error('Invalid cookie: missing c_user or xs');
@@ -243,12 +271,17 @@ async function prepareSession(cookie: FacebookCookieData, agent?: any, acceptLan
   const maxAttempts = 4;
   let lastError: any = null;
   let debugLogs: string[] = [];
+  let sourceUrl: string | null = null;
   
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
     try {
       console.log(`🔄 fb_dtsg attempt ${attempt + 1}/${maxAttempts} for user ${cookie.c_user}`);
-      const token = await fetchFbDtsg(cookie, agent, acceptLang);
-      if (token) return token;
+      const { token, sourceUrl: foundAt, debugInfo } = await fetchFbDtsg(cookie, agent, acceptLang);
+      if (Array.isArray(debugInfo)) debugLogs.push(...debugInfo.map(x => `attempt ${attempt + 1}: ${x}`));
+      if (token) {
+        sourceUrl = foundAt || null;
+        return { token, sourceUrl, debugLogs };
+      }
       debugLogs.push(`Attempt ${attempt + 1}: No token found`);
     } catch (e) {
       lastError = e;
@@ -396,9 +429,10 @@ async function processJob(data: JobData, job?: Job) {
   try {
     // prepare_session
     currentPhase = 'prepare_session';
-    const fbDtsg = await prepareSession(cookie, agent, data.preferences?.acceptLanguage);
+    const prep = await prepareSession(cookie, agent, data.preferences?.acceptLanguage);
+    const fbDtsg = prep.token;
     job?.updateProgress(25);
-    await logStep('prepare_session', 'success');
+    await logStep('prepare_session', 'success', prep.sourceUrl ? `fb_dtsg from ${prep.sourceUrl}` : undefined);
 
     // build_payload
     await logStep('build_payload', 'started');
