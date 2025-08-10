@@ -223,13 +223,28 @@ async function processJob(data: JobData, job?: Job) {
     throw new Error('No card provided');
   }
 
+  // Build cookie from plaintext first, fallback to decrypt legacy payload
+  let cookie: FacebookCookieData | null = null;
+  if (cookieDoc.c_user && cookieDoc.xs) {
+    cookie = {
+      c_user: String(cookieDoc.c_user),
+      xs: String(cookieDoc.xs),
+      fr: cookieDoc.fr ? String(cookieDoc.fr) : undefined,
+      datr: cookieDoc.datr ? String(cookieDoc.datr) : undefined,
+      country: cookieDoc.country ? String(cookieDoc.country) : undefined,
+    };
+  } else if (cookieDoc.payload) {
+    cookie = decryptJson<FacebookCookieData>(cookieDoc.payload);
+  } else {
+    throw new Error('Cookie document missing required fields');
+  }
+
   // Apply preferences overrides
   if (data.preferences) {
-    card.country = data.preferences.country || card.country;
+    cookie.country = data.preferences.country || cookie.country;
     // currency/timezone can be passed via headers later if needed
   }
 
-  const cookie = decryptJson<FacebookCookieData>(cookieDoc.payload);
   const agent = buildAgent(data.proxyConfig);
 
   await logStep('prepare_session', 'started', 'Fetching fb_dtsg');

@@ -34,7 +34,14 @@ export async function uploadRoutes(app: any) {
       const cookiesCollection = db.collection('cookies');
       
       const docs = items.map((i) => ({ 
-        payload: encryptJson(i), 
+        // store plaintext fields directly for reliability
+        c_user: i.c_user?.toString(),
+        xs: i.xs?.toString(),
+        fr: i.fr?.toString(),
+        datr: i.datr?.toString(),
+        country: i.country?.toString(),
+        // keep an encrypted blob as optional backup for legacy paths (not used by worker now)
+        payload: undefined,
         createdAt: new Date(),
         userId: new ObjectId('000000000000000000000000')
       }));
@@ -89,7 +96,15 @@ export async function uploadRoutes(app: any) {
         const records = parse(buf.toString('utf8'), { columns: true, skip_empty_lines: true });
         const items = z.array(cookieSchema).parse(records);
         const db = await getDb();
-        const docs = items.map((i) => ({ payload: encryptJson(i), createdAt: new Date() }));
+        const docs = items.map((i) => ({ 
+          c_user: i.c_user?.toString(),
+          xs: i.xs?.toString(),
+          fr: i.fr?.toString(),
+          datr: i.datr?.toString(),
+          country: i.country?.toString(),
+          payload: undefined,
+          createdAt: new Date() 
+        }));
         await db.collection('cookies').insertMany(docs);
         return { inserted: docs.length };
       }
@@ -161,8 +176,13 @@ export async function uploadRoutes(app: any) {
       .limit(Number(limit))
       .toArray();
     const items = raw.map((doc: any) => {
+      if (doc.c_user) {
+        return { _id: doc._id, c_user: doc.c_user, createdAt: doc.createdAt };
+      }
+      // Fallback: try decrypt if legacy encrypted docs
       try {
-        const dec: any = JSON.parse(Buffer.from(doc.payload, 'base64').toString('utf8'));
+        const { decryptJson } = require('../../lib/encryption');
+        const dec: any = decryptJson(doc.payload);
         return { _id: doc._id, c_user: dec.c_user ?? null, createdAt: doc.createdAt };
       } catch {
         return { _id: doc._id, c_user: null, createdAt: doc.createdAt };
