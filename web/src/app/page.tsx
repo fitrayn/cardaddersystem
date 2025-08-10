@@ -3,6 +3,7 @@
 import { useAuth } from '../lib/auth-context';
 import LoginForm from '../components/LoginForm';
 import Dashboard from '../components/Dashboard';
+import Link from 'next/link';
 
 export default function Home() {
   const { user, isLoading } = useAuth();
@@ -22,5 +23,12 @@ export default function Home() {
     return <LoginForm />;
   }
 
-  return <Dashboard />;
+  return (
+    <div className="min-h-screen">
+      <div className="p-4 flex justify-end">
+        <Link href="/linking" className="px-4 py-2 rounded bg-green-600 text-white">بدء المهام</Link>
+      </div>
+      <Dashboard />
+    </div>
+  );
 }

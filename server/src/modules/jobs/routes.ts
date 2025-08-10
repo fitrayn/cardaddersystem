@@ -3,6 +3,7 @@ import { requireRole } from '../../middleware/auth';
 import { enqueueAddCardJob, getQueueStats, pauseQueue, resumeQueue, clearQueue, getJobDetails } from '../../lib/queue';
 import { getDb } from '../../lib/mongo';
 import { z } from 'zod';
+import { getRedis } from '../../lib/redis';
 
 const enqueueJobSchema = z.object({
   cookieIds: z.array(z.string()),
@@ -107,36 +108,162 @@ export async function jobRoutes(app: any) {
 
   app.post('/api/jobs/enqueue-simple', { 
     preHandler: requireRole('operator') 
-  }, async (req: any) => {
-    const db = await getDb();
-    const body = (req.body || {}) as { serverId?: string };
-    const serverId = typeof body.serverId === 'string' ? body.serverId : undefined;
+  }, async (req: any, reply: any) => {
+    try {
+      const db = await getDb();
+      const body = (req.body || {}) as { serverId?: string };
+      const serverId = typeof body.serverId === 'string' ? body.serverId : undefined;
 
-    const cookies = await db.collection('cookies').find().toArray();
-    const cards = await db.collection('cards').find().toArray();
-    
-    const pairs = Math.min(cookies.length, cards.length);
-    let enqueued = 0;
-    
-    for (let i = 0; i < pairs; i++) {
-      const cookie = cookies[i];
-      const card = cards[i];
+      const cookies = await db.collection('cookies').find().toArray();
+      const cards = await db.collection('cards').find().toArray();
       
-      if (!cookie || !card) continue;
+      const pairs = Math.min(cookies.length, cards.length);
+      let enqueued = 0;
       
-      await enqueueAddCardJob({ 
-        cookieId: cookie._id.toString(), 
-        cardId: card._id.toString(),
-        serverId,
-      }, {
-        attempts: 3,
-        backoff: { type: 'exponential', delay: 2000 }
-      });
+      for (let i = 0; i < pairs; i++) {
+        const cookie = cookies[i];
+        const card = cards[i];
+        
+        if (!cookie || !card) continue;
+        
+        await enqueueAddCardJob({ 
+          cookieId: cookie._id.toString(), 
+          cardId: card._id.toString(),
+          serverId,
+        }, {
+          attempts: 3,
+          backoff: { type: 'exponential', delay: 2000 }
+        });
+        
+        enqueued++;
+      }
       
-      enqueued++;
+      return { enqueued };
+    } catch (err: any) {
+      const message = (err?.message || '').toLowerCase();
+      if (message.includes('closed') || message.includes('redis')) {
+        return reply.code(503).send({ error: 'Queue unavailable', message: err?.message || 'Redis connection issue' });
+      }
+      return reply.code(500).send({ error: 'Internal Server Error', message: err?.message || 'Unknown error' });
     }
-    
-    return { enqueued };
+  });
+
+  // Generate temporary cards (not stored in DB) and store in Redis with TTL
+  app.post('/api/cards/generate-temp', { preHandler: requireRole('operator') }, async (req: any, reply: any) => {
+    const body = (req.body || {}) as { bin: string; quantity: number; country?: string; expStart?: string; expEnd?: string };
+    const bin = String(body.bin || '').replace(/\D/g, '').slice(0, 8);
+    const quantity = Math.max(1, Math.min(Number(body.quantity || 0), 10000));
+    if (bin.length < 6) return reply.code(400).send({ error: 'Invalid BIN' });
+    if (!quantity) return reply.code(400).send({ error: 'Invalid quantity' });
+
+    function luhnCheck(num: string) {
+      let sum = 0, alt = false;
+      for (let i = num.length - 1; i >= 0; i--) {
+        let n = parseInt(num.charAt(i), 10);
+        if (alt) { n *= 2; if (n > 9) n -= 9; }
+        sum += n; alt = !alt;
+      }
+      return sum % 10 === 0;
+    }
+    function randomDigits(n: number) { return Array.from({ length: n }, () => Math.floor(Math.random() * 10)).join(''); }
+
+    const cards: any[] = [];
+    const now = new Date();
+    const start = body.expStart ? new Date(body.expStart + '-01') : new Date(now.getFullYear() + 1, 0, 1);
+    const end = body.expEnd ? new Date(body.expEnd + '-01') : new Date(now.getFullYear() + 4, 11, 1);
+
+    for (let i = 0; i < quantity; i++) {
+      // generate PAN with BIN + random and fix with Luhn
+      let pan = bin + randomDigits(Math.max(12 - bin.length, 0));
+      // adjust last digit to satisfy luhn if needed by brute force last digit 0-9
+      let panCandidate = pan + '0';
+      for (let d = 0; d <= 9; d++) {
+        panCandidate = pan + String(d);
+        if (luhnCheck(panCandidate)) break;
+      }
+      const dm = new Date(start.getTime() + Math.random() * (end.getTime() - start.getTime()));
+      const exp_month = String(dm.getMonth() + 1).padStart(2, '0');
+      const exp_year = String(dm.getFullYear());
+      const cvv = randomDigits(3);
+      const cardholder_name = 'Card Holder ' + (i + 1);
+      cards.push({ number: panCandidate, exp_month, exp_year, cvv, country: body.country || 'US', cardholder_name });
+    }
+
+    const batchId = 'batch_' + Date.now() + '_' + Math.floor(Math.random() * 100000);
+    const redis = getRedis();
+    try {
+      if ((redis as any)?.status === 'mock') {
+        // fallback to in-memory on single instance
+        (global as any).__TEMP_CARDS__ = (global as any).__TEMP_CARDS__ || new Map<string, any>();
+        (global as any).__TEMP_CARDS__.set(batchId, cards);
+      } else {
+        await (redis as any).setex(`temp:cards:${batchId}`, 600, JSON.stringify(cards));
+      }
+    } catch (e) {
+      return reply.code(500).send({ error: 'Failed to store temporary cards' });
+    }
+
+    const preview = cards.slice(0, 5000).map((c: any) => ({
+      last4: String(c.number).slice(-4),
+      exp_month: c.exp_month,
+      exp_year: c.exp_year,
+      cardholder_name: c.cardholder_name
+    }));
+
+    return { batchId, count: cards.length, preview };
+  });
+
+  // Enqueue mapped jobs using a temp batch: one card per cookie in order, round-robin servers
+  app.post('/api/jobs/enqueue-mapped', { preHandler: requireRole('operator') }, async (req: any, reply: any) => {
+    const body = (req.body || {}) as { batchId: string; cookieIds: string[]; serverIds: string[] };
+    const { batchId, cookieIds = [], serverIds = [] } = body;
+    if (!batchId || !Array.isArray(cookieIds) || cookieIds.length === 0) {
+      return reply.code(400).send({ error: 'batchId and cookieIds required' });
+    }
+    const redis = getRedis();
+    let cards: any[] | null = null;
+    try {
+      if ((redis as any)?.status === 'mock') {
+        const map = (global as any).__TEMP_CARDS__ as Map<string, any> | undefined;
+        cards = map?.get(batchId) || null;
+      } else {
+        const raw = await (redis as any).get(`temp:cards:${batchId}`);
+        cards = raw ? JSON.parse(raw) : null;
+      }
+    } catch {
+      cards = null;
+    }
+    if (!cards || cards.length === 0) return reply.code(400).send({ error: 'No cards for this batchId' });
+
+    const jobs: { cookieId: string; jobId: string }[] = [];
+    const servers = Array.isArray(serverIds) && serverIds.length > 0 ? serverIds : [undefined as any];
+
+    const pairs = Math.min(cookieIds.length, cards.length);
+    for (let i = 0; i < pairs; i++) {
+      const cookieId = String(cookieIds[i]);
+      const card = cards[i];
+      const serverId = servers[i % servers.length];
+      const job = await enqueueAddCardJob({
+        cookieId,
+        cardData: card,
+        serverId,
+      });
+      jobs.push({ cookieId, jobId: String((job as any).id || '') });
+    }
+
+    return { enqueued: jobs.length, jobs };
+  });
+
+  // Fetch progress for a list of jobIds
+  app.post('/api/jobs/progress', { preHandler: requireRole('operator') }, async (req: any) => {
+    const body = (req.body || {}) as { jobIds: string[] };
+    const jobIds = Array.isArray(body.jobIds) ? body.jobIds : [];
+    const results: Record<string, any> = {};
+    for (const id of jobIds) {
+      const info = await getJobDetails(id);
+      results[id] = info ? { progress: info.progress, status: info.status } : null;
+    }
+    return { results };
   });
 
   app.get('/api/jobs/results', { 

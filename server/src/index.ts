@@ -15,6 +15,13 @@ import { serverRoutes } from './modules/servers/routes';
 const app = (createFastify as any)({ logger: true });
 
 app.register(helmet);
+
+// Accept empty JSON bodies to avoid FST_ERR_CTP_EMPTY_JSON_BODY
+app.addContentTypeParser('application/json', { parseAs: 'string' }, (req: any, body: string, done: any) => {
+  if (!body) return done(null, {});
+  try { done(null, JSON.parse(body)); } catch (err) { done(err as any); }
+});
+
 app.register(cors, {
   origin: (origin: string | undefined, cb: (err: Error | null, allow?: boolean) => void) => {
     // Allow requests with no origin (like mobile apps or curl requests)
@@ -57,8 +64,6 @@ app.get('/health', async () => ({
   version: '1.0.0',
   environment: env.NODE_ENV
 }));
-
-
 
 // Initialize database connection
 app.addHook('onReady', async () => {

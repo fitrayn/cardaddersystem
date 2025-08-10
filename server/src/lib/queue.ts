@@ -60,7 +60,20 @@ if (!env.REDIS_URL) {
 // Enhanced job data interface
 export interface AddCardJobData {
   cookieId: string;
-  cardId: string;
+  cardId?: string;
+  cardData?: {
+    number: string;
+    exp_month: string;
+    exp_year: string;
+    cvv: string;
+    country?: string;
+    currency?: string;
+    timezone?: string;
+    cardholder_name?: string;
+    postal_code?: string;
+    city?: string;
+    street_address?: string;
+  };
   serverId?: string;
   proxyConfig?: {
     type: 'http' | 'https' | 'socks5';

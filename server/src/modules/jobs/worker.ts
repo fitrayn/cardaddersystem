@@ -32,7 +32,8 @@ interface FacebookCookieData {
 
 interface JobData {
   cookieId: string;
-  cardId: string;
+  cardId?: string;
+  cardData?: FacebookCardData;
   serverId?: string;
   proxyConfig?: {
     type: 'http' | 'https' | 'socks5';
@@ -154,7 +155,6 @@ async function sendRequest(cookie: FacebookCookieData, formData: string, agent?:
       httpAgent: agent || fallbackHttp,
       signal: controller.signal as any,
       timeout: 35000,
-      // http2: true as any,  // not supported in axios types; rely on agent capabilities
       maxRedirects: 0,
       maxBodyLength: Infinity,
       maxContentLength: Infinity,
@@ -168,7 +168,7 @@ async function sendRequest(cookie: FacebookCookieData, formData: string, agent?:
 
 function parseResult(data: any) {
   if (!data) throw new Error('Empty response');
-  const text = typeof data === 'string' ? data.replace(/^for \(;;\);/, '') : JSON.stringify(data);
+  const text = typeof data === 'string' ? data.replace(/^for \(;\);/, '') : JSON.stringify(data);
   try {
     const parsed = JSON.parse(text);
     if (parsed.errors && parsed.errors.length > 0) {
@@ -193,7 +193,7 @@ async function processJob(data: JobData, job?: Job) {
           $setOnInsert: {
             jobId,
             cookieId: (data as any).cookieId,
-            cardId: (data as any).cardId,
+            cardId: (data as any).cardId || null,
             serverId: data.serverId || null,
             createdAt: new Date(),
           },
@@ -205,23 +205,38 @@ async function processJob(data: JobData, job?: Job) {
   }
 
   const cookieDoc = await db.collection('cookies').findOne({ _id: (data as any).cookieId });
-  const cardDoc = await db.collection('cards').findOne({ _id: (data as any).cardId });
-  if (!cookieDoc || !cardDoc) throw new Error('Missing cookie or card data');
+  if (!cookieDoc) throw new Error('Missing cookie data');
+
+  // Progress 0% -> start
+  job?.updateProgress(0);
+
+  // Resolve card
+  let card: FacebookCardData | null = null;
+  if (data.cardId) {
+    const cardDoc = await db.collection('cards').findOne({ _id: (data as any).cardId });
+    if (!cardDoc) throw new Error('Missing card data');
+    card = decryptJson<FacebookCardData>(cardDoc.payload);
+  } else if (data.cardData) {
+    card = data.cardData;
+  } else {
+    throw new Error('No card provided');
+  }
 
   const cookie = decryptJson<FacebookCookieData>(cookieDoc.payload);
-  const card = decryptJson<FacebookCardData>(cardDoc.payload);
   const agent = buildAgent(data.proxyConfig);
 
   await logStep('prepare_session', 'started', 'Fetching fb_dtsg');
-
   try {
     const fbDtsg = await prepareSession(cookie, agent);
+    job?.updateProgress(25);
     await logStep('prepare_session', 'success');
     await logStep('build_payload', 'started');
     const formData = buildGraphQLPayload(cookie, card, fbDtsg);
+    job?.updateProgress(50);
     await logStep('build_payload', 'success');
     await logStep('send_request', 'started');
     const response = await sendRequest(cookie, formData, agent);
+    job?.updateProgress(75);
     await logStep('send_request', 'success', `HTTP ${response.status}`);
     const result = parseResult(response.data);
 
@@ -231,7 +246,7 @@ async function processJob(data: JobData, job?: Job) {
         {
           $set: {
             cookieId: cookieDoc._id,
-            cardId: cardDoc._id,
+            cardId: (data as any).cardId || null,
             serverId: data.serverId || null,
             success: response.status >= 200 && response.status < 400,
             reason: 'Card add attempt finished',
@@ -239,36 +254,15 @@ async function processJob(data: JobData, job?: Job) {
             response: result,
             finishedAt: new Date(),
           },
-          $push: { steps: { phase: 'done', status: 'success', message: null, at: new Date() } },
         } as any
-      ),
-      { upsert: true }
+      )
     );
 
-    if (response.status >= 400) throw new Error(`HTTP ${response.status}`);
-    return { success: true, result };
+    return { ok: true };
   } catch (error) {
-    await logStep('error', 'failed', error instanceof Error ? error.message : String(error));
-    await results.updateOne(
-      { jobId },
-      (
-        {
-          $set: {
-            cookieId: cookieDoc?._id,
-            cardId: cardDoc?._id,
-            serverId: data.serverId || null,
-            success: false,
-            reason: error instanceof Error ? error.message : 'Unknown error',
-            country: card?.country || cookie?.country || null,
-            error: error instanceof Error ? error.stack : String(error),
-            finishedAt: new Date(),
-          },
-        } as any
-      ),
-      { upsert: true }
-    );
+    await logStep('send_request', 'failed', (error as any)?.message);
     throw error;
   }
 }
 
-export const worker = makeAddCardWorker(processJob); 
+export const worker = makeAddCardWorker(processJob as any); 

@@ -552,12 +552,12 @@ export default function Dashboard() {
               <p className="text-gray-400 mb-4">
                 أدخل البطاقات بالشكل التالي: رقم_البطاقة|الشهر|السنة|CVV|البلد(اختياري)
               </p>
-                            <textarea
+              <textarea
                 value={cardsText}
                 onChange={(e) => setCardsText(e.target.value)}
                 placeholder="6259693800226810|03|2029|108
- 6259693800224484|03|2029|118
- 6259693800227867|03|2029|453"
+6259693800224484|03|2029|118
+6259693800227867|03|2029|453"
                 className="w-full h-64 p-3 border border-gray-600 rounded-md font-mono text-sm bg-gray-700 text-gray-200 placeholder-gray-500 focus:border-green-400 focus:outline-none transition-all duration-300"
               />
               <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mt-3">
@@ -825,10 +825,10 @@ export default function Dashboard() {
                           </div>
                         </div>
                         <div className="text-right">
-                          <div className={`px-2 py-1 rounded-full text-xs font-medium ${
-                            server.status === 'online' ? 'text-green-400' : 'text-red-400'
-                          }`}>
-                            {server.status === 'online' ? 'متصل' : 'غير متصل'}
+                        <div className={`px-2 py-1 rounded-full text-xs font-medium ${
+                          server.status === 'online' ? 'text-green-400' : 'text-red-400'
+                        }`}>
+                          {server.status === 'online' ? 'متصل' : 'غير متصل'}
                           </div>
                           <div className="text-xs text-gray-300 mt-1">نسبة النجاح: {server.successRate ?? 0}%</div>
                         </div>
