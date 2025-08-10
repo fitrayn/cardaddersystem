@@ -3,6 +3,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { useAuth } from '../lib/auth-context';
 import { apiClient, API_ENDPOINTS } from '../lib/api';
+import ServerManagementCompact from './ServerManagement';
 
 interface ServerStatus {
   status: string;
@@ -544,6 +545,9 @@ export default function Dashboard() {
           </div>
         )}
 
+        {/* Server Management Compact */}
+        <ServerManagementCompact />
+
         {/* Cards Input Modal */}
         {showCardsInput && (
           <div className="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center z-50 p-4">
@@ -734,18 +738,6 @@ export default function Dashboard() {
             />
           </div>
 
-          <div className="bg-gray-800/50 backdrop-blur-sm rounded-lg border border-gray-600 p-6 hover:border-purple-400 transition-all duration-300 hover:scale-105 group">
-            <div className="text-purple-400 text-3xl mb-4">🚀</div>
-            <h3 className="text-xl font-semibold text-gray-200 mb-2">بدء المهام</h3>
-            <p className="text-gray-400 mb-4">بدء معالجة إضافة البطاقات</p>
-            <button 
-              onClick={startJobs}
-              disabled={uploading}
-              className="bg-purple-600 hover:bg-purple-700 disabled:bg-gray-600 text-white font-medium py-2 px-4 rounded-md transition-all duration-300 hover:scale-105 disabled:hover:scale-100 hover:shadow-lg hover:shadow-purple-500/50"
-            >
-              {uploading ? 'جاري البدء...' : servers.length > 0 ? 'بدء المهام' : 'إضافة سيرفر أولاً'}
-            </button>
-          </div>
 
           <div className="bg-gray-800/50 backdrop-blur-sm rounded-lg border border-gray-600 p-6 hover:border-orange-400 transition-all duration-300 hover:scale-105 group">
             <div className="text-orange-400 text-3xl mb-4">📊</div>

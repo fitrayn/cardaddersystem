@@ -5,6 +5,22 @@ import { apiClient } from '../../lib/api';
 import { useAuth } from '../../lib/auth-context';
 import Link from 'next/link';
 
+// Country fingerprint defaults
+const COUNTRY_PRESETS: Record<string, { tz: string; lang: string; currency?: string }> = {
+  EG: { tz: 'Africa/Cairo', lang: 'ar-EG,ar;q=0.9,en-US;q=0.8', currency: 'EGP' },
+  SA: { tz: 'Asia/Riyadh', lang: 'ar-SA,ar;q=0.9,en-US;q=0.8', currency: 'SAR' },
+  AE: { tz: 'Asia/Dubai', lang: 'ar-AE,ar;q=0.9,en-US;q=0.8', currency: 'AED' },
+  MA: { tz: 'Africa/Casablanca', lang: 'ar-MA,ar;q=0.9,fr-FR;q=0.8,en-US;q=0.7', currency: 'MAD' },
+  US: { tz: 'America/New_York', lang: 'en-US,en;q=0.9', currency: 'USD' },
+  GB: { tz: 'Europe/London', lang: 'en-GB,en;q=0.9', currency: 'GBP' },
+  FR: { tz: 'Europe/Paris', lang: 'fr-FR,fr;q=0.9,en-US;q=0.8', currency: 'EUR' },
+  DE: { tz: 'Europe/Berlin', lang: 'de-DE,de;q=0.9,en-US;q=0.8', currency: 'EUR' },
+  TR: { tz: 'Europe/Istanbul', lang: 'tr-TR,tr;q=0.9,en-US;q=0.8', currency: 'TRY' },
+  IN: { tz: 'Asia/Kolkata', lang: 'en-IN,en;q=0.9,hi-IN;q=0.7', currency: 'INR' },
+  ID: { tz: 'Asia/Jakarta', lang: 'id-ID,id;q=0.9,en-US;q=0.8', currency: 'IDR' },
+  BR: { tz: 'America/Sao_Paulo', lang: 'pt-BR,pt;q=0.9,en-US;q=0.8', currency: 'BRL' },
+};
+
 type CookieRow = { _id: string; c_user: string | null; createdAt?: string };
 
 type ServerItem = { _id: string; name: string; isActive?: boolean };
@@ -37,6 +53,12 @@ export default function LinkingPage() {
   const [expStart, setExpStart] = useState<string>(''); // YYYY-MM
   const [expEnd, setExpEnd] = useState<string>('');   // YYYY-MM
 
+  // Fingerprint preferences
+  const [useAutoFingerprint, setUseAutoFingerprint] = useState(true);
+  const [timezone, setTimezone] = useState('');
+  const [acceptLanguage, setAcceptLanguage] = useState('');
+  const [currency, setCurrency] = useState<string>('');
+
   const [batchId, setBatchId] = useState<string | null>(null);
   const [preview, setPreview] = useState<GenerateTempResponse['preview']>([]);
 
@@ -51,7 +73,7 @@ export default function LinkingPage() {
   const [toasts, setToasts] = useState<Toast[]>([]);
 
   // Templates (localStorage)
-  type Template = { name: string; bin: string; country: string; expStart?: string; expEnd?: string; serverIds: string[] };
+  type Template = { name: string; bin: string; country: string; expStart?: string; expEnd?: string; serverIds: string[]; timezone?: string; acceptLanguage?: string; currency?: string; useAuto?: boolean };
   const [templates, setTemplates] = useState<Template[]>([]);
   const [templateName, setTemplateName] = useState('');
 
@@ -61,6 +83,15 @@ export default function LinkingPage() {
       if (raw) setTemplates(JSON.parse(raw));
     } catch {}
   }, []);
+
+  // Auto-fill fingerprint when country changes
+  useEffect(() => {
+    if (!useAutoFingerprint) return;
+    const preset = COUNTRY_PRESETS[country] || COUNTRY_PRESETS['US'];
+    setTimezone(preset.tz);
+    setAcceptLanguage(preset.lang);
+    setCurrency(preset.currency || '');
+  }, [country, useAutoFingerprint]);
 
   const saveTemplates = (list: Template[]) => {
     setTemplates(list);
@@ -93,7 +124,7 @@ export default function LinkingPage() {
     // Load available servers
     (async () => {
       try {
-        const res = await apiClient.get<{ success: boolean; data: ServerItem[] }>(`/api/servers/available`);
+        const res = await apiClient.get<{ success: boolean; data: ServerItem[] }>(`/api/servers`);
         setServers(res?.data || []);
       } catch (e) {
         console.error('Failed to load servers', e);
@@ -216,12 +247,20 @@ export default function LinkingPage() {
     }
     setBusy(true);
     try {
+      const prefs: any = {
+        country,
+        timezone,
+        acceptLanguage,
+      };
+      if (currency) prefs.currency = currency;
+
       const res = await apiClient.post<EnqueueMappedResponse>(`/api/jobs/enqueue-mapped`, {
         batchId,
         cookieIds: selectedCookieIds,
         serverIds: selectedServerIds,
         rateLimitPerServer,
         healthCheck,
+        preferences: prefs,
       });
       const mapping: Record<string, string> = {};
       res.jobs.forEach(j => { mapping[j.cookieId] = j.jobId; });
@@ -262,12 +301,16 @@ export default function LinkingPage() {
     setExpStart(tpl.expStart || '');
     setExpEnd(tpl.expEnd || '');
     setSelectedServerIds(tpl.serverIds || []);
+    setUseAutoFingerprint(tpl.useAuto ?? true);
+    if (tpl.timezone) setTimezone(tpl.timezone);
+    if (tpl.acceptLanguage) setAcceptLanguage(tpl.acceptLanguage);
+    if (tpl.currency) setCurrency(tpl.currency);
     addToast('success', `تم تطبيق القالب: ${tpl.name}`);
   };
 
   const saveCurrentAsTemplate = () => {
     if (!templateName.trim()) { addToast('info', 'أدخل اسمًا للقالب'); return; }
-    const tpl: Template = { name: templateName.trim(), bin, country, expStart, expEnd, serverIds: selectedServerIds };
+    const tpl: Template = { name: templateName.trim(), bin, country, expStart, expEnd, serverIds: selectedServerIds, timezone, acceptLanguage, currency, useAuto: useAutoFingerprint };
     const list = [...templates.filter(t => t.name !== tpl.name), tpl];
     saveTemplates(list);
     setTemplateName('');
@@ -323,6 +366,47 @@ export default function LinkingPage() {
         </div>
 
         <div className="p-4 rounded-lg border border-slate-200 bg-white">
+          <h2 className="font-semibold mb-3 text-slate-800">البصمة (الدولة/اللغة/المنطقة الزمنية)</h2>
+          <div className="space-y-3">
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="block text-sm text-slate-700">الدولة (ISO-2)</label>
+                <select className="w-full border rounded px-3 py-2" value={country} onChange={(e) => setCountry(e.target.value)}>
+                  {Object.keys(COUNTRY_PRESETS).map(c => (
+                    <option key={c} value={c}>{c}</option>
+                  ))}
+                </select>
+              </div>
+              <label className="flex items-center gap-2 text-sm text-slate-700 mt-6">
+                <input type="checkbox" checked={useAutoFingerprint} onChange={e => setUseAutoFingerprint(e.target.checked)} />
+                استخدام القيم التلقائية حسب الدولة
+              </label>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="block text-sm text-slate-700">Accept-Language</label>
+                <input className="w-full border rounded px-3 py-2" value={acceptLanguage} onChange={(e) => setAcceptLanguage(e.target.value)} disabled={useAutoFingerprint} />
+              </div>
+              <div>
+                <label className="block text-sm text-slate-700">Timezone (IANA)</label>
+                <input className="w-full border rounded px-3 py-2" value={timezone} onChange={(e) => setTimezone(e.target.value)} disabled={useAutoFingerprint} />
+              </div>
+              <div>
+                <label className="block text-sm text-slate-700">Currency (اختياري)</label>
+                <input className="w-full border rounded px-3 py-2" value={currency} onChange={(e) => setCurrency(e.target.value)} disabled={useAutoFingerprint} />
+              </div>
+            </div>
+            <div className="rounded border border-slate-200 p-3 bg-slate-50 text-xs text-slate-700">
+              <div className="font-medium mb-1">معاينة البصمة</div>
+              <div>Country: {country}</div>
+              <div>Timezone: {timezone || '(auto)'}</div>
+              <div>Accept-Language: {acceptLanguage || '(auto)'}</div>
+              <div>Currency: {currency || '(none)'}</div>
+            </div>
+          </div>
+        </div>
+
+        <div className="p-4 rounded-lg border border-slate-200 bg-white">
           <h2 className="font-semibold mb-3 text-slate-800">توليد البطاقات (مؤقتًا)</h2>
           <div className="space-y-3">
             <div>
@@ -334,10 +418,6 @@ export default function LinkingPage() {
               <input className="w-full border rounded px-3 py-2" type="number" readOnly value={quantity} />
             </div>
             <div className="grid grid-cols-2 gap-3">
-              <div>
-                <label className="block text-sm text-slate-700">الدولة</label>
-                <input className="w-full border rounded px-3 py-2" value={country} onChange={(e) => setCountry(e.target.value)} />
-              </div>
               <div>
                 <label className="block text-sm text-slate-700">Exp Start (YYYY-MM)</label>
                 <input className="w-full border rounded px-3 py-2" placeholder="2026-01" value={expStart} onChange={(e) => setExpStart(e.target.value)} />
@@ -353,14 +433,6 @@ export default function LinkingPage() {
             )}
           </div>
         </div>
-
-        <div className="p-4 rounded-lg border border-slate-200 bg-white">
-          <h2 className="font-semibold mb-3 text-slate-800">التحكم</h2>
-          <div className="space-y-3">
-            <button disabled={!batchId || selectedCookieIds.length === 0 || busy} onClick={startLinking} className="px-4 py-2 rounded bg-green-600 text-white disabled:opacity-50 hover:bg-green-700">بدء الربط</button>
-            <div className="text-xs text-slate-600">اختر سيرفرات متعددة ليتم التوزيع عليها بالترتيب (Round-robin)</div>
-          </div>
-        </div>
       </div>
 
       <div className="p-4 rounded-lg border border-slate-200 bg-white">
@@ -374,9 +446,9 @@ export default function LinkingPage() {
           </div>
         </div>
         <div className="overflow-auto">
-          <table className="min-w-full text-sm">
+          <table className="min-w-full text-sm text-slate-800">
             <thead>
-              <tr className="bg-slate-100">
+              <tr className="bg-slate-100 text-slate-900">
                 <th className="p-2">تحديد</th>
                 <th className="p-2">Cookie ID</th>
                 <th className="p-2">c_user</th>
@@ -399,17 +471,17 @@ export default function LinkingPage() {
                     <td className="p-2 text-center">
                       <input type="checkbox" checked={checked} onChange={() => toggleCookie(id)} />
                     </td>
-                    <td className="p-2 font-mono text-xs">{id}</td>
-                    <td className="p-2">{c.c_user || '-'}</td>
-                    <td className="p-2">{batchId ? (last4 ? `**** **** **** ${last4}` : '-') : '-'}</td>
-                    <td className="p-2">{serverName || '-'}</td>
+                    <td className="p-2 font-mono text-xs text-slate-900">{id}</td>
+                    <td className="p-2 text-slate-800">{c.c_user || '-'}</td>
+                    <td className="p-2 text-slate-800">{batchId ? (last4 ? `**** **** **** ${last4}` : '-') : '-'}</td>
+                    <td className="p-2 text-slate-800">{serverName || '-'}</td>
                     <td className="p-2">
                       <div className="w-40 bg-slate-200 rounded h-2 overflow-hidden">
                         <div className="bg-blue-600 h-2" style={{ width: `${prog}%` }} />
                       </div>
-                      <div className="text-xs text-slate-600 mt-1">{prog}%</div>
+                      <div className="text-xs text-slate-800 mt-1">{prog}%</div>
                     </td>
-                    <td className="p-2 text-xs">{status}</td>
+                    <td className="p-2 text-xs text-slate-800">{status}</td>
                   </tr>
                 );
               })}
