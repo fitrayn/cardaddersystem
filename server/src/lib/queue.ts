@@ -22,10 +22,7 @@ if (!env.REDIS_URL) {
     clean: () => Promise.resolve(),
     getJob: () => Promise.resolve(null)
   };
-  addCardQueueEvents = {
-    on: () => {},
-    off: () => {},
-  } as any;
+  addCardQueueEvents = {};
 } else {
   try {
     connection = getRedis();
@@ -56,40 +53,14 @@ if (!env.REDIS_URL) {
       clean: () => Promise.resolve(),
       getJob: () => Promise.resolve(null)
     };
-    addCardQueueEvents = {
-      on: () => {},
-      off: () => {},
-    } as any;
+    addCardQueueEvents = {};
   }
-}
-
-export function getQueueEvents() {
-  return addCardQueueEvents as QueueEvents;
 }
 
 // Enhanced job data interface
 export interface AddCardJobData {
   cookieId: string;
-  cardId?: string;
-  cardData?: {
-    number: string;
-    exp_month: string;
-    exp_year: string;
-    cvv: string;
-    country?: string;
-    currency?: string;
-    timezone?: string;
-    cardholder_name?: string;
-    postal_code?: string;
-    city?: string;
-    street_address?: string;
-  };
-  preferences?: {
-    country?: string;
-    currency?: string;
-    timezone?: string;
-    acceptLanguage?: string;
-  };
+  cardId: string;
   serverId?: string;
   proxyConfig?: {
     type: 'http' | 'https' | 'socks5';

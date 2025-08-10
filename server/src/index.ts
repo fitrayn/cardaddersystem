@@ -11,7 +11,6 @@ import { uploadRoutes } from './modules/uploads/routes';
 import { jobRoutes } from './modules/jobs/routes';
 import { statsRoutes } from './modules/stats/routes';
 import { serverRoutes } from './modules/servers/routes';
-import './modules/jobs/worker';
 
 const app = (createFastify as any)({ logger: true });
 
@@ -49,13 +48,9 @@ app.register(cors, {
   },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Origin', 'Accept', 'Cache-Control'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Origin', 'Accept'],
   exposedHeaders: ['Content-Range', 'X-Content-Range'],
-  preflightContinue: false,
-  optionsSuccessStatus: 204
 });
-
-
 app.register(cookie);
 app.register(rateLimit, {
   max: 100,

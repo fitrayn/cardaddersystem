@@ -6,39 +6,33 @@ let redis: any = null;
 export function getRedis(): any {
   if (redis) return redis;
 
-  const rawUrl = env.REDIS_URL;
-  if (!rawUrl) {
+  const url = env.REDIS_URL;
+  if (!url) {
     console.warn('[redis] REDIS_URL not set. Using mock queue (no Redis connection).');
     return { status: 'mock' } as any;
   }
 
-  // Ensure TLS for Upstash or any remote provider requiring TLS
-  let url = rawUrl;
-  const needsTls = /upstash\.io/.test(url) || url.startsWith('rediss://');
-  if (/upstash\.io/.test(url) && url.startsWith('redis://')) {
-    url = url.replace(/^redis:\/\//, 'rediss://');
+  // Treat localhost URLs as absent in hosted environments
+  if (/localhost|127\.0\.0\.1/.test(url)) {
+    console.warn('[redis] Localhost URL detected; disabling Redis connection and using mock.');
+    return { status: 'mock' } as any;
   }
 
+  const isTls = url.startsWith('rediss://');
   redis = new Redis(url, {
-    // Avoid lazy connect; establish connection upfront and auto-retry
-    lazyConnect: false,
     maxRetriesPerRequest: null,
     enableReadyCheck: false,
-    retryStrategy: (times: number) => Math.min(times * 1000, 5000),
-    enableOfflineQueue: true,
-    autoResubscribe: true,
-    autoResendUnfulfilledCommands: true,
-    ...(needsTls ? { tls: {} } : {}),
+    lazyConnect: true,
+    retryStrategy: () => null, // do not retry endlessly
+    enableOfflineQueue: false, // do not queue when offline
+    autoResubscribe: false,
+    autoResendUnfulfilledCommands: false,
+    ...(isTls ? { tls: {} } : {}),
   } as any);
 
+  // Soften error noise
   redis.on('error', (err: any) => {
     console.warn('[redis] connection error:', err?.code || err?.message || String(err));
-  });
-  redis.on('end', () => {
-    console.warn('[redis] connection ended');
-  });
-  redis.on('close', () => {
-    console.warn('[redis] connection closed');
   });
 
   return redis;

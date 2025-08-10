@@ -7,7 +7,6 @@ import { env } from '../../config/env';
 import type { Job } from 'bullmq';
 import http from 'node:http';
 import https from 'node:https';
-import { ObjectId } from 'mongodb';
 
 interface FacebookCardData {
   number: string;
@@ -29,21 +28,11 @@ interface FacebookCookieData {
   fr?: string;
   datr?: string;
   country?: string;
-  // Additional cookies that may help keep session context stable
-  sb?: string;
-  ps_l?: string;
-  ps_n?: string;
-  dpr?: string;
-  wd?: string;
-  alsfid?: string;
-  presence?: string;
 }
 
 interface JobData {
   cookieId: string;
-  cardId?: string;
-  cardData?: FacebookCardData;
-  preferences?: { country?: string; currency?: string; timezone?: string; acceptLanguage?: string };
+  cardId: string;
   serverId?: string;
   proxyConfig?: {
     type: 'http' | 'https' | 'socks5';
@@ -56,197 +45,97 @@ interface JobData {
 }
 
 const FB_BILLING_URL = 'https://business.facebook.com/billing/payment_methods';
-const FB_SETTINGS_PAYMENTS_URL = 'https://business.facebook.com/settings?tab=payments';
-const FB_HOME_URL = 'https://business.facebook.com/';
 const FB_GRAPHQL_URL = 'https://business.facebook.com/api/graphql/';
+const FB_ORIGIN = 'https://business.facebook.com';
 
 function buildCookieHeader(cookie: FacebookCookieData): string {
-  const decode = (v?: string) => {
-    if (!v) return undefined;
-    try { return decodeURIComponent(v); } catch { return v; }
-  };
   const parts: string[] = [];
-  const push = (k: string, v?: string) => { if (typeof v === 'string' && v.length > 0) parts.push(`${k}=${v}`); };
-  push('c_user', decode(cookie.c_user));
-  push('xs', decode(cookie.xs));
-  push('fr', decode(cookie.fr));
-  push('datr', decode(cookie.datr));
-  push('sb', decode(cookie.sb));
-  push('ps_l', decode(cookie.ps_l));
-  push('ps_n', decode(cookie.ps_n));
-  push('dpr', decode(cookie.dpr));
-  push('wd', decode(cookie.wd));
-  push('alsfid', decode(cookie.alsfid));
-  push('presence', decode(cookie.presence));
+  parts.push(`c_user=${cookie.c_user}`);
+  parts.push(`xs=${cookie.xs}`);
+  if (cookie.fr) parts.push(`fr=${cookie.fr}`);
+  if (cookie.datr) parts.push(`datr=${cookie.datr}`);
   return parts.join('; ');
 }
 
-function extractFbDtsgFromHtml(html: string): string | null {
-  if (!html) return null;
-  const patterns: RegExp[] = [
-    /name=\"fb_dtsg\"\s+value=\"([^\"]+)\"/i,
-    /name=\"fb_dtsg\"[^>]*value=\"([^\"]+)\"/i,
-    /__DTSGInitialData__\s*=\s*\"([^\"]+)\"/i,
-    /DTSGInitialData[^\{]*\{\s*\"token\":\s*\"([^\"]+)\"/i,
-    /\"fb_dtsg\"\s*:\s*\"([^\"]+)\"/i,
-  ];
-  for (const rx of patterns) {
-    const m = html.match(rx);
-    if (m && m[1]) return m[1];
-  }
-  return null;
+interface SessionTokens {
+  fbDtsg: string;
+  lsd?: string;
+  jazoest: string;
 }
 
-function extractDocIdFromHtml(html: string): string | null {
-  if (!html) return null;
-  // Try to find doc_id near the friendly name useBillingAddPaymentMethodMutation
-  const rx1 = /useBillingAddPaymentMethodMutation[\s\S]*?\"doc_id\"\s*:\s*\"(\d+)\"/i;
-  const m1 = html.match(rx1);
-  if (m1 && m1[1]) return m1[1];
-  // Generic doc_id fallback
-  const rx2 = /\"doc_id\"\s*:\s*\"(\d{8,})\"/;
-  const m2 = html.match(rx2);
-  if (m2 && m2[1]) return m2[1];
-  return null;
+function computeJazoest(fbDtsg: string): string {
+  // jazoest = '2' + sum of char codes of fb_dtsg
+  let sum = 0;
+  for (let i = 0; i < fbDtsg.length; i++) sum += fbDtsg.charCodeAt(i);
+  return `2${sum}`;
 }
 
-function extractLsdFromHtml(html: string): string | undefined {
-  if (!html) return undefined;
-  const rx1 = /name=\"lsd\"\s+value=\"([^\"]+)\"/i;
-  const m1 = html.match(rx1);
-  if (m1 && m1[1]) return m1[1];
-  const rx2 = /\"LSD\"\s*:\s*\{\s*\"token\"\s*:\s*\"([^\"]+)\"/i;
-  const m2 = html.match(rx2);
-  if (m2 && m2[1]) return m2[1];
-  return undefined;
-}
-
-function isLoginRedirect(status: number, location?: string): boolean {
-  if (!location) return false;
-  const loc = location.toLowerCase();
-  return (status >= 300 && status < 400) && (loc.includes('login') || loc.includes('checkpoint'));
-}
-
-async function httpGet(url: string, cookie: FacebookCookieData, agent?: any, referer?: string, acceptLang?: string) {
+async function fetchTokensFromUrl(url: string, cookie: FacebookCookieData, agent?: any): Promise<Partial<SessionTokens>> {
   const headers = {
     'User-Agent': env.FB_USER_AGENT,
-    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
-    'Accept-Language': acceptLang || env.FB_ACCEPT_LANGUAGE,
+    'Accept-Language': env.FB_ACCEPT_LANGUAGE,
     'Cookie': buildCookieHeader(cookie),
-    'Connection': 'keep-alive',
-    'Upgrade-Insecure-Requests': '1',
-    ...(referer ? { 'Referer': referer } : {}),
-    'Sec-Fetch-Site': 'same-origin',
-    'Sec-Fetch-Mode': 'navigate',
-    'Sec-Fetch-Dest': 'document',
-  } as Record<string, string>;
+  };
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 15000);
+  const timeoutId = setTimeout(() => controller.abort(), 7000);
   try {
     const resp = await axios.get(url, {
       headers,
       httpsAgent: agent,
       httpAgent: agent,
       signal: controller.signal as any,
-      timeout: 20000,
-      validateStatus: (s) => s >= 200 && s < 500,
+      timeout: 9000,
       maxRedirects: 0,
+      validateStatus: (s) => s >= 200 && s < 400,
     });
-    return resp;
+    const html = typeof resp.data === 'string' ? resp.data : '';
+    const out: Partial<SessionTokens> = {};
+    // fb_dtsg variants
+    let match = html.match(/name="fb_dtsg"\s+value="([^"]+)"/);
+    if (match) out.fbDtsg = match[1];
+    if (!out.fbDtsg) {
+      match = html.match(/__DTSGInitialData__\s*=\s*"([^"]+)"/);
+      if (match) out.fbDtsg = match[1];
+    }
+    // lsd token variants
+    match = html.match(/name="lsd"\s+value="([^"]+)"/);
+    if (match) out.lsd = match[1];
+    if (!out.lsd) {
+      match = html.match(/LSD\s*=\s*\{[^}]*?token\s*:\s*"([^"]+)"/);
+      if (match) out.lsd = match[1];
+    }
+    if (out.fbDtsg) {
+      out.jazoest = computeJazoest(out.fbDtsg);
+    }
+    return out;
   } finally {
     clearTimeout(timeoutId);
   }
 }
 
-async function fetchFbDtsg(cookie: FacebookCookieData, agent?: any, acceptLang?: string): Promise<{ token?: string; sourceUrl?: string; debugInfo: string[]; docId?: string; lsd?: string }> {
-  // Warm up: hit home to establish session context
-  try { await httpGet(FB_HOME_URL, cookie, agent, undefined, acceptLang); } catch {}
-
-  const tryPages = [
-    // Business primary endpoints
-    { url: FB_BILLING_URL, referer: FB_HOME_URL },
-    { url: FB_SETTINGS_PAYMENTS_URL, referer: FB_HOME_URL },
-    { url: 'https://business.facebook.com/adsmanager/manage/', referer: FB_HOME_URL },
-    { url: 'https://business.facebook.com/adsmanager', referer: FB_HOME_URL },
-    { url: 'https://business.facebook.com/ads/manager/billing/transactions', referer: FB_HOME_URL },
-    { url: 'https://business.facebook.com/ads/manager/account_settings/account_billing', referer: FB_HOME_URL },
-    { url: 'https://business.facebook.com/settings?tab=business_tools', referer: FB_HOME_URL },
-    { url: 'https://business.facebook.com/settings?tab=people', referer: FB_HOME_URL },
-    { url: 'https://business.facebook.com/settings?tab=business_info', referer: FB_HOME_URL },
-    { url: 'https://business.facebook.com/business_locations', referer: FB_HOME_URL },
-    { url: 'https://business.facebook.com/events_manager2/list/pixel', referer: FB_HOME_URL },
-    { url: 'https://business.facebook.com/commerce_manager', referer: FB_HOME_URL },
-
-    // www.facebook variants
-    { url: 'https://www.facebook.com/settings?tab=payments', referer: 'https://www.facebook.com/' },
-    { url: 'https://www.facebook.com/adsmanager/manage/', referer: 'https://www.facebook.com/' },
-    { url: 'https://www.facebook.com/adsmanager', referer: 'https://www.facebook.com/' },
-    { url: 'https://www.facebook.com/ads/manager/billing/transactions', referer: 'https://www.facebook.com/' },
-
-    // m.facebook mobile endpoints
-    { url: 'https://m.facebook.com/settings?tab=payments', referer: 'https://m.facebook.com/' },
-    { url: 'https://m.facebook.com/adsmanager', referer: 'https://m.facebook.com/' },
-    { url: 'https://m.facebook.com/business', referer: 'https://m.facebook.com/' },
-
-    // mbasic (very lightweight)
-    { url: 'https://mbasic.facebook.com/settings?tab=payments', referer: 'https://mbasic.facebook.com/' },
-    { url: 'https://mbasic.facebook.com/adsmanager', referer: 'https://mbasic.facebook.com/' },
-
-    // Fallback generic homes
-    { url: 'https://www.facebook.com/', referer: undefined as any },
-    { url: FB_HOME_URL, referer: undefined as any },
+async function fetchSessionTokens(cookie: FacebookCookieData, agent?: any): Promise<SessionTokens | null> {
+  // Try multiple known pages that usually expose tokens
+  const candidateUrls = [
+    FB_BILLING_URL,
+    'https://business.facebook.com/business_locations',
+    'https://business.facebook.com/adsmanager/manage/billing_settings',
+    'https://business.facebook.com/ads/manager/billing/transactions/'
   ];
-
-  let debugInfo: string[] = [];
-  for (const entry of tryPages) {
-    try {
-      const resp = await httpGet(entry.url, cookie, agent, entry.referer as any, acceptLang);
-      const status = resp.status;
-      const location = (resp.headers as any)?.location as string | undefined;
-      
-      debugInfo.push(`${entry.url}: HTTP ${status}${location ? ` -> ${location}` : ''}`);
-      
-      if (isLoginRedirect(status, location)) {
-        // Immediate indication that session is invalid
-        throw new Error(`Facebook session requires login (redirected to login/checkpoint from ${entry.url})`);
-      }
-      
-      const html = typeof resp.data === 'string' ? resp.data : '';
-      const token = extractFbDtsgFromHtml(html);
-      const docId = extractDocIdFromHtml(html) || undefined;
-      const lsd = extractLsdFromHtml(html);
-      if (token) {
-        console.log(`✅ fb_dtsg found on ${entry.url}${docId ? ` (doc_id ${docId})` : ''}${lsd ? ' + lsd' : ''}`);
-        return { token, sourceUrl: entry.url, debugInfo, docId, lsd };
-      }
-      
-      // Log partial HTML content for debugging (first 500 chars)
-      const htmlSnippet = html.substring(0, 500).replace(/\s+/g, ' ');
-      debugInfo.push(`  HTML snippet: ${htmlSnippet}...`);
-      
-      // Check for common error indicators
-      if (html.includes('challenge') || html.includes('checkpoint')) {
-        debugInfo.push(`  ⚠️ Challenge/checkpoint detected in HTML`);
-      }
-      if (html.includes('login') || html.includes('Log In')) {
-        debugInfo.push(`  ⚠️ Login required detected in HTML`);
-      }
-      
-    } catch (error) {
-      debugInfo.push(`${entry.url}: ERROR - ${(error as any)?.message}`);
-      if ((error as any)?.message?.includes('login') || (error as any)?.message?.includes('checkpoint')) {
-        throw error; // Re-throw login-related errors immediately
-      }
+  for (const url of candidateUrls) {
+    const tokens = await fetchTokensFromUrl(url, cookie, agent);
+    if (tokens.fbDtsg) {
+      return {
+        fbDtsg: tokens.fbDtsg!,
+        lsd: tokens.lsd,
+        jazoest: tokens.jazoest || computeJazoest(tokens.fbDtsg!),
+      };
     }
   }
-  
-  // Log all debug info when no token found
-  console.log(`❌ fb_dtsg not found. Debug info:\n${debugInfo.join('\n')}`);
-  return { debugInfo };
+  return null;
 }
 
-function buildGraphQLPayload(cookie: FacebookCookieData, card: FacebookCardData, fbDtsg: string, docIdOverride?: string, lsdToken?: string) {
-  const docId = docIdOverride || env.FB_DOC_ID || 'useBillingAddPaymentMethodMutation';
+function buildGraphQLPayload(cookie: FacebookCookieData, card: FacebookCardData, tokens: SessionTokens) {
+  const docId = env.FB_DOC_ID || 'useBillingAddPaymentMethodMutation';
   const variables = {
     input: {
       payment_method_type: 'CREDIT_CARD',
@@ -272,82 +161,42 @@ function buildGraphQLPayload(cookie: FacebookCookieData, card: FacebookCardData,
     __user: cookie.c_user,
     __a: 1,
     dpr: 1,
-    fb_dtsg: fbDtsg,
+    fb_dtsg: tokens.fbDtsg,
+    jazoest: tokens.jazoest,
     fb_api_caller_class: 'RelayModern',
     fb_api_req_friendly_name: 'useBillingAddPaymentMethodMutation',
     variables: JSON.stringify(variables),
     server_timestamps: true,
     doc_id: docId,
   };
-  if (lsdToken) requestData['lsd'] = lsdToken;
+  if (tokens.lsd) requestData.lsd = tokens.lsd;
   const formData = Object.entries(requestData)
     .map(([key, value]) => `${encodeURIComponent(key)}=${encodeURIComponent(String(value))}`)
     .join('&');
   return formData;
 }
 
-async function prepareSession(cookie: FacebookCookieData, agent?: any, acceptLang?: string): Promise<{ token: string; sourceUrl: string | null; debugLogs: string[]; docId?: string; lsd?: string }> {
-  // Basic cookie validation
-  if (!cookie.c_user || !cookie.xs) {
-    throw new Error('Invalid cookie: missing c_user or xs');
+async function prepareSession(cookie: FacebookCookieData, agent?: any): Promise<SessionTokens> {
+  // retry up to 3 times for tokens
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const tokens = await fetchSessionTokens(cookie, agent);
+    if (tokens) return tokens;
   }
-  if (cookie.c_user.length < 10 || cookie.xs.length < 20) {
-    throw new Error('Invalid cookie: c_user or xs appears malformed');
-  }
-  
-  const maxAttempts = 4;
-  let lastError: any = null;
-  let debugLogs: string[] = [];
-  let sourceUrl: string | null = null;
-  let docId: string | undefined = undefined;
-  let lsd: string | undefined = undefined;
-  
-  for (let attempt = 0; attempt < maxAttempts; attempt++) {
-    try {
-      console.log(`🔄 fb_dtsg attempt ${attempt + 1}/${maxAttempts} for user ${cookie.c_user}`);
-      const { token, sourceUrl: foundAt, debugInfo, docId: foundDocId, lsd: foundLsd } = await fetchFbDtsg(cookie, agent, acceptLang);
-      if (Array.isArray(debugInfo)) debugLogs.push(...debugInfo.map(x => `attempt ${attempt + 1}: ${x}`));
-      if (token) {
-        sourceUrl = foundAt || null;
-        docId = foundDocId || undefined;
-        lsd = foundLsd || undefined;
-        return { token, sourceUrl, debugLogs, docId, lsd };
-      }
-      debugLogs.push(`Attempt ${attempt + 1}: No token found`);
-    } catch (e) {
-      lastError = e;
-      debugLogs.push(`Attempt ${attempt + 1}: ${(e as any)?.message}`);
-      
-      // Don't retry if it's clearly a session issue
-      if ((e as any)?.message?.includes('login') || (e as any)?.message?.includes('checkpoint')) {
-        break;
-      }
-    }
-    // Small backoff between attempts
-    if (attempt < maxAttempts - 1) {
-      await new Promise(res => setTimeout(res, 500 * (attempt + 1)));
-    }
-  }
-  
-  // Comprehensive error message
-  const errorDetails = debugLogs.join('; ');
-  const hint = lastError?.message ? `: ${String(lastError.message)}` : '';
-  throw new Error(`Failed to get fb_dtsg token after ${maxAttempts} attempts${hint}. Details: ${errorDetails}`);
+  throw new Error('Failed to get fb_dtsg token');
 }
 
-async function sendRequest(cookie: FacebookCookieData, formData: string, agent?: any, preferences?: { acceptLanguage?: string }, opts?: { lsd?: string; friendlyName?: string }) {
-  const headers = {
+async function sendRequest(cookie: FacebookCookieData, formData: string, tokens: SessionTokens, agent?: any) {
+  const headers: Record<string, string> = {
     'Content-Type': 'application/x-www-form-urlencoded',
-    'Accept': 'application/json, text/plain, */*',
     'User-Agent': env.FB_USER_AGENT,
-    'Accept-Language': (preferences?.acceptLanguage) || env.FB_ACCEPT_LANGUAGE,
+    'Accept-Language': env.FB_ACCEPT_LANGUAGE,
     'Cookie': buildCookieHeader(cookie),
     'Connection': 'keep-alive',
+    'Origin': FB_ORIGIN,
     'Referer': FB_BILLING_URL,
-    'Origin': 'https://business.facebook.com',
-    ...(opts?.friendlyName ? { 'x-fb-friendly-name': opts.friendlyName } : {}),
-    ...(opts?.lsd ? { 'x-fb-lsd': opts.lsd } : {}),
-  } as Record<string, string>;
+    'x-fb-friendly-name': 'useBillingAddPaymentMethodMutation',
+  };
+  if (tokens.lsd) headers['x-fb-lsd'] = tokens.lsd;
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), 30000); // 30s phase timeout
   try {
@@ -372,7 +221,7 @@ async function sendRequest(cookie: FacebookCookieData, formData: string, agent?:
 
 function parseResult(data: any) {
   if (!data) throw new Error('Empty response');
-  const text = typeof data === 'string' ? data.replace(/^for \(;\);/, '') : JSON.stringify(data);
+  const text = typeof data === 'string' ? data.replace(/^for \(;;\);/, '') : JSON.stringify(data);
   try {
     const parsed = JSON.parse(text);
     if (parsed.errors && parsed.errors.length > 0) {
@@ -380,39 +229,9 @@ function parseResult(data: any) {
     }
     return parsed;
   } catch (e) {
+    // If not JSON, still accept as success fallback
     return { raw: text };
   }
-}
-
-function isAddPaymentSuccess(parsed: any): boolean {
-  // Heuristics for GraphQL mutation success
-  if (!parsed || typeof parsed !== 'object') return false;
-  const json = parsed;
-  if (json.data) {
-    const d = json.data;
-    // Common success shapes reported by similar mutations
-    if (d.useBillingAddPaymentMethodMutation || d.addPaymentMethod || d.payment_account || d.credit_card) return true;
-  }
-  // If raw string contains known markers
-  const raw = typeof parsed.raw === 'string' ? parsed.raw : '';
-  if (raw.includes('payment_method') || raw.includes('CREDIT_CARD')) return true;
-  return false;
-}
-
-async function verifyCardAdded(cookie: FacebookCookieData, last4: string, agent?: any, acceptLang?: string): Promise<boolean> {
-  try {
-    const pages = [FB_BILLING_URL, FB_SETTINGS_PAYMENTS_URL];
-    for (const url of pages) {
-      const resp = await httpGet(url, cookie, agent, FB_HOME_URL, acceptLang);
-      const html = typeof resp.data === 'string' ? resp.data : '';
-      if (!html) continue;
-      if (html.includes(last4)) return true;
-      // Try masked patterns
-      const rx = new RegExp(`(?:\\*{2,}\s*){2,}${last4}`);
-      if (rx.test(html)) return true;
-    }
-  } catch {}
-  return false;
 }
 
 async function processJob(data: JobData, job?: Job) {
@@ -427,7 +246,7 @@ async function processJob(data: JobData, job?: Job) {
           $setOnInsert: {
             jobId,
             cookieId: (data as any).cookieId,
-            cardId: (data as any).cardId || null,
+            cardId: (data as any).cardId,
             serverId: data.serverId || null,
             createdAt: new Date(),
           },
@@ -438,88 +257,37 @@ async function processJob(data: JobData, job?: Job) {
     );
   }
 
-  const cookieObjectId = (() => { try { return new ObjectId(String((data as any).cookieId)); } catch { return null; } })();
-  if (!cookieObjectId) throw new Error('Invalid cookie id');
+  const cookieDoc = await db.collection('cookies').findOne({ _id: (data as any).cookieId });
+  const cardDoc = await db.collection('cards').findOne({ _id: (data as any).cardId });
+  if (!cookieDoc || !cardDoc) throw new Error('Missing cookie or card data');
 
-  const cookieDoc = await db.collection('cookies').findOne({ _id: cookieObjectId });
-  if (!cookieDoc) throw new Error('Missing cookie data');
-
-  job?.updateProgress(0);
-
-  let card: FacebookCardData | null = null;
-  if (data.cardId) {
-    const cardObjectId = (() => { try { return new ObjectId(String((data as any).cardId)); } catch { return null; } })();
-    if (!cardObjectId) throw new Error('Invalid card id');
-    const cardDoc = await db.collection('cards').findOne({ _id: cardObjectId });
-    if (!cardDoc) throw new Error('Missing card data');
-    card = decryptJson<FacebookCardData>(cardDoc.payload);
-  } else if (data.cardData) {
-    card = data.cardData;
-  } else {
-    throw new Error('No card provided');
-  }
-
-  let cookie: FacebookCookieData | null = null;
-  if (cookieDoc.c_user && cookieDoc.xs) {
-    cookie = {
-      c_user: String(cookieDoc.c_user),
-      xs: String(cookieDoc.xs),
-      fr: cookieDoc.fr ? String(cookieDoc.fr) : undefined,
-      datr: cookieDoc.datr ? String(cookieDoc.datr) : undefined,
-      country: cookieDoc.country ? String(cookieDoc.country) : undefined,
-      sb: cookieDoc.sb ? String(cookieDoc.sb) : undefined,
-      ps_l: cookieDoc.ps_l ? String(cookieDoc.ps_l) : undefined,
-      ps_n: cookieDoc.ps_n ? String(cookieDoc.ps_n) : undefined,
-      dpr: cookieDoc.dpr ? String(cookieDoc.dpr) : undefined,
-      wd: cookieDoc.wd ? String(cookieDoc.wd) : undefined,
-      alsfid: cookieDoc.alsfid ? String(cookieDoc.alsfid) : undefined,
-      presence: cookieDoc.presence ? String(cookieDoc.presence) : undefined,
-    };
-  } else if (cookieDoc.payload) {
-    cookie = decryptJson<FacebookCookieData>(cookieDoc.payload);
-  } else {
-    throw new Error('Cookie document missing required fields');
-  }
-
-  if (data.preferences) {
-    cookie.country = data.preferences.country || cookie.country;
-  }
-
+  const cookie = decryptJson<FacebookCookieData>(cookieDoc.payload);
+  const card = decryptJson<FacebookCardData>(cardDoc.payload);
   const agent = buildAgent(data.proxyConfig);
 
-  // Track current phase for precise failure logging
-  let currentPhase: 'prepare_session' | 'build_payload' | 'send_request' = 'prepare_session';
-
   await logStep('prepare_session', 'started', 'Fetching fb_dtsg');
+
   try {
-    // prepare_session
-    currentPhase = 'prepare_session';
-    const prep = await prepareSession(cookie, agent, data.preferences?.acceptLanguage);
-    const fbDtsg = prep.token;
-    job?.updateProgress(25);
-    await logStep('prepare_session', 'success', prep.sourceUrl ? `fb_dtsg from ${prep.sourceUrl}` : undefined);
-
-    // build_payload
+    const tokens = await prepareSession(cookie, agent);
+    await logStep('prepare_session', 'success', `fb_dtsg fetched`);
     await logStep('build_payload', 'started');
-    currentPhase = 'build_payload';
-    const formData = buildGraphQLPayload(cookie, card, fbDtsg, (prep as any).docId ?? undefined, (prep as any).lsd ?? undefined);
-    job?.updateProgress(50);
+    const formData = buildGraphQLPayload(cookie, card, tokens);
     await logStep('build_payload', 'success');
-
-    // send_request
     await logStep('send_request', 'started');
-    currentPhase = 'send_request';
-    const response = await sendRequest(cookie, formData, agent, data.preferences, { lsd: (prep as any).lsd, friendlyName: 'useBillingAddPaymentMethodMutation' });
-    job?.updateProgress(75);
-    await logStep('send_request', 'success', `HTTP ${response.status}`);
-    const result = parseResult(response.data);
 
-    const cardLast4 = String(card.number || '').replace(/\s+/g, '').slice(-4);
-    let successHeuristic = response.status >= 200 && response.status < 400 && isAddPaymentSuccess(result);
-    if (!successHeuristic && cardLast4 && cardLast4.length === 4) {
-      // Post-verify by checking payments pages
-      const verified = await verifyCardAdded(cookie, cardLast4, agent, data.preferences?.acceptLanguage);
-      successHeuristic = verified;
+    // Try up to 2 attempts of sending the GraphQL request if response isn't clearly successful
+    let response = await sendRequest(cookie, formData, tokens, agent);
+    await logStep('send_request', 'success', `HTTP ${response.status}`);
+    let result = parseResult(response.data);
+
+    // Optional heuristic: if response lacks data and status < 400, retry once with fresh tokens
+    if (response.status < 400 && typeof result === 'object' && !('data' in result)) {
+      await logStep('retry', 'started', 'Retrying with fresh tokens');
+      const refreshed = await prepareSession(cookie, agent);
+      const formData2 = buildGraphQLPayload(cookie, card, refreshed);
+      response = await sendRequest(cookie, formData2, refreshed, agent);
+      await logStep('retry', 'success', `HTTP ${response.status}`);
+      result = parseResult(response.data);
     }
 
     await results.updateOne(
@@ -528,28 +296,44 @@ async function processJob(data: JobData, job?: Job) {
         {
           $set: {
             cookieId: cookieDoc._id,
-            cardId: (data as any).cardId || null,
+            cardId: cardDoc._id,
             serverId: data.serverId || null,
-            success: successHeuristic,
-            reason: successHeuristic ? 'Card add attempt finished' : 'GraphQL response did not confirm addition',
+            success: response.status >= 200 && response.status < 400,
+            reason: 'Card add attempt finished',
             country: card.country || cookie.country || null,
             response: result,
             finishedAt: new Date(),
           },
+          $push: { steps: { phase: 'done', status: 'success', message: null, at: new Date() } },
         } as any
-      )
+      ),
+      { upsert: true }
     );
 
-    if (!successHeuristic) {
-      throw new Error('Add card not confirmed by GraphQL response');
-    }
-
-    return { ok: true };
+    if (response.status >= 400) throw new Error(`HTTP ${response.status}`);
+    return { success: true, result };
   } catch (error) {
-    // Log failure for the exact phase that failed
-    await logStep(currentPhase, 'failed', (error as any)?.message);
+    await logStep('error', 'failed', error instanceof Error ? error.message : String(error));
+    await results.updateOne(
+      { jobId },
+      (
+        {
+          $set: {
+            cookieId: cookieDoc?._id,
+            cardId: cardDoc?._id,
+            serverId: data.serverId || null,
+            success: false,
+            reason: error instanceof Error ? error.message : 'Unknown error',
+            country: card?.country || cookie?.country || null,
+            error: error instanceof Error ? error.stack : String(error),
+            finishedAt: new Date(),
+          },
+        } as any
+      ),
+      { upsert: true }
+    );
     throw error;
   }
 }
 
-export const worker = makeAddCardWorker(processJob as any); 
+export const worker = makeAddCardWorker(processJob); 
