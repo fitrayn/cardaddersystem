@@ -5,6 +5,7 @@ import { getDb } from '../../lib/mongo';
 import { z } from 'zod';
 import { getRedis } from '../../lib/redis';
 import { ServerService } from '../servers/service';
+import { env } from '../../config/env';
 
 const enqueueJobSchema = z.object({
   cookieIds: z.array(z.string()),
@@ -322,11 +323,58 @@ export async function jobRoutes(app: any) {
     return { enqueued: jobs.length, jobs };
   });
 
+  // Explicit preflight handler for SSE endpoint to ensure CORS is set correctly
+  app.options('/api/jobs/events', async (req: any, reply: any) => {
+    const origin = (req.headers?.origin as string | undefined) || '';
+    const allowedOrigins = [
+      'http://localhost:3000',
+      'http://localhost:3001',
+      'https://elaborate-youtiao-1fc402.netlify.app',
+      'https://cardaddersystem.netlify.app',
+      'https://cardaddersystem.vercel.app',
+    ];
+    const allow = !origin || allowedOrigins.includes(origin) || env.NODE_ENV === 'development';
+    if (allow && origin) {
+      reply.header('Access-Control-Allow-Origin', origin);
+      reply.header('Vary', 'Origin');
+    } else if (allow) {
+      reply.header('Access-Control-Allow-Origin', '*');
+    }
+    reply
+      .header('Access-Control-Allow-Methods', 'GET, OPTIONS')
+      .header('Access-Control-Allow-Headers', 'Authorization, Content-Type, X-Requested-With, Origin, Accept')
+      .header('Access-Control-Max-Age', '86400')
+      .code(204)
+      .send();
+  });
+
   // SSE: subscribe to job progress events in real-time
   app.get('/api/jobs/events', { preHandler: requireRole('operator') }, async (req: any, reply: any) => {
+    const origin = (req.headers?.origin as string | undefined) || '';
+    const allowedOrigins = [
+      'http://localhost:3000',
+      'http://localhost:3001',
+      'https://elaborate-youtiao-1fc402.netlify.app',
+      'https://cardaddersystem.netlify.app',
+      'https://cardaddersystem.vercel.app',
+    ];
+    const allow = !origin || allowedOrigins.includes(origin) || env.NODE_ENV === 'development';
+
+    // Take over the underlying response to stream SSE and set CORS headers explicitly
+    // Ensure CORS headers are present before headers are flushed
+    if (allow && origin) {
+      reply.raw.setHeader('Access-Control-Allow-Origin', origin);
+      reply.raw.setHeader('Vary', 'Origin');
+    } else if (allow) {
+      reply.raw.setHeader('Access-Control-Allow-Origin', '*');
+    }
+
     reply.raw.setHeader('Content-Type', 'text/event-stream');
     reply.raw.setHeader('Cache-Control', 'no-cache');
     reply.raw.setHeader('Connection', 'keep-alive');
+
+    // Hijack the response to stream events
+    (reply as any).hijack?.();
     reply.raw.flushHeaders?.();
 
     const events = getQueueEvents();
