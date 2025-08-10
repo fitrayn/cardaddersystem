@@ -30,8 +30,6 @@ export default function Dashboard() {
   const [showCookiesInput, setShowCookiesInput] = useState(false);
   const [cardsText, setCardsText] = useState('');
   const [cookiesText, setCookiesText] = useState('');
-  const [matrixEffect, setMatrixEffect] = useState(false);
-  const [glitchEffect, setGlitchEffect] = useState(false);
 
   const cardsFileRef = useRef<HTMLInputElement>(null);
   const cookiesFileRef = useRef<HTMLInputElement>(null);
@@ -41,18 +39,6 @@ export default function Dashboard() {
     if (user) {
       fetchStats();
     }
-    
-    // Matrix effect on load
-    setMatrixEffect(true);
-    setTimeout(() => setMatrixEffect(false), 2000);
-    
-    // Periodic glitch effect
-    const glitchInterval = setInterval(() => {
-      setGlitchEffect(true);
-      setTimeout(() => setGlitchEffect(false), 200);
-    }, 5000);
-    
-    return () => clearInterval(glitchInterval);
   }, [user]);
 
   const checkServerConnection = async () => {
@@ -63,17 +49,9 @@ export default function Dashboard() {
       const status = await apiClient.get<ServerStatus>(API_ENDPOINTS.HEALTH);
       setServerStatus(status);
       setIsConnected(true);
-      
-      // Success animation
-      setMatrixEffect(true);
-      setTimeout(() => setMatrixEffect(false), 1000);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'فشل الاتصال بالخادم');
       setIsConnected(false);
-      
-      // Error animation
-      setGlitchEffect(true);
-      setTimeout(() => setGlitchEffect(false), 500);
     } finally {
       setLoading(false);
     }
@@ -113,16 +91,8 @@ export default function Dashboard() {
       const result = response as { inserted: number };
       setMessage(`تم رفع ${type} بنجاح! تم إضافة ${result.inserted} عنصر.`);
       fetchStats(); // Refresh stats
-      
-      // Success animation
-      setMatrixEffect(true);
-      setTimeout(() => setMatrixEffect(false), 1500);
     } catch (err) {
       setError(err instanceof Error ? err.message : `فشل رفع ${type}`);
-      
-      // Error animation
-      setGlitchEffect(true);
-      setTimeout(() => setGlitchEffect(false), 800);
     } finally {
       setUploading(false);
     }
@@ -161,16 +131,8 @@ export default function Dashboard() {
       setCardsText('');
       setShowCardsInput(false);
       fetchStats();
-      
-      // Success animation
-      setMatrixEffect(true);
-      setTimeout(() => setMatrixEffect(false), 1500);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'فشل رفع البطاقات');
-      
-      // Error animation
-      setGlitchEffect(true);
-      setTimeout(() => setGlitchEffect(false), 800);
     } finally {
       setUploading(false);
     }
@@ -216,16 +178,8 @@ export default function Dashboard() {
       setCookiesText('');
       setShowCookiesInput(false);
       fetchStats();
-      
-      // Success animation
-      setMatrixEffect(true);
-      setTimeout(() => setMatrixEffect(false), 1500);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'فشل رفع الكوكيز');
-      
-      // Error animation
-      setGlitchEffect(true);
-      setTimeout(() => setGlitchEffect(false), 800);
     } finally {
       setUploading(false);
     }
@@ -255,16 +209,8 @@ export default function Dashboard() {
       const result = response as { enqueued: number };
       setMessage(`تم بدء المهام بنجاح! تم إضافة ${result.enqueued} مهمة.`);
       fetchStats(); // Refresh stats
-      
-      // Success animation
-      setMatrixEffect(true);
-      setTimeout(() => setMatrixEffect(false), 1500);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'فشل بدء المهام');
-      
-      // Error animation
-      setGlitchEffect(true);
-      setTimeout(() => setGlitchEffect(false), 800);
     } finally {
       setUploading(false);
     }
@@ -284,47 +230,17 @@ export default function Dashboard() {
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-gray-900 via-blue-900 to-black p-8 relative overflow-hidden">
-      {/* Matrix Rain Effect */}
-      {matrixEffect && (
-        <div className="fixed inset-0 pointer-events-none z-10">
-          <div className="absolute inset-0 bg-gradient-to-b from-transparent via-green-500/20 to-transparent animate-pulse"></div>
-          <div className="absolute top-0 left-0 w-full h-full text-green-400 text-xs font-mono opacity-30 animate-pulse">
-            {Array.from({ length: 50 }).map((_, i) => (
-              <div
-                key={i}
-                className="absolute animate-bounce"
-                style={{
-                  left: `${Math.random() * 100}%`,
-                  animationDelay: `${Math.random() * 2}s`,
-                  animationDuration: `${1 + Math.random() * 2}s`
-                }}
-              >
-                {Math.random().toString(36).substring(2, 4)}
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {/* Glitch Effect */}
-      {glitchEffect && (
-        <div className="fixed inset-0 pointer-events-none z-10">
-          <div className="absolute inset-0 bg-red-500/10 animate-pulse"></div>
-          <div className="absolute inset-0 bg-blue-500/10 animate-pulse" style={{ animationDelay: '0.1s' }}></div>
-        </div>
-      )}
-
-      {/* Scanning Lines */}
+      {/* Subtle Scanning Lines */}
       <div className="fixed inset-0 pointer-events-none z-5">
-        <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-transparent via-green-400 to-transparent animate-pulse"></div>
-        <div className="absolute bottom-0 left-0 w-full h-1 bg-gradient-to-r from-transparent via-blue-400 to-transparent animate-pulse" style={{ animationDelay: '1s' }}></div>
+        <div className="absolute top-0 left-0 w-full h-0.5 bg-gradient-to-r from-transparent via-green-400/30 to-transparent animate-pulse"></div>
+        <div className="absolute bottom-0 left-0 w-full h-0.5 bg-gradient-to-r from-transparent via-blue-400/30 to-transparent animate-pulse" style={{ animationDelay: '1s' }}></div>
       </div>
 
       <div className="max-w-7xl mx-auto relative z-20">
         {/* Header */}
         <div className="flex justify-between items-center mb-8">
-          <div className={`${glitchEffect ? 'animate-pulse' : ''}`}>
-            <h1 className="text-4xl font-bold text-transparent bg-clip-text bg-gradient-to-r from-green-400 via-blue-400 to-purple-400 mb-2 animate-pulse">
+          <div>
+            <h1 className="text-4xl font-bold text-transparent bg-clip-text bg-gradient-to-r from-green-400 via-blue-400 to-purple-400 mb-2">
               نظام إضافة البطاقات
             </h1>
             <p className="text-xl text-gray-300">
@@ -341,7 +257,7 @@ export default function Dashboard() {
 
         {/* Messages */}
         {message && (
-          <div className="bg-green-900/50 border border-green-400 rounded-md p-4 mb-6 animate-pulse backdrop-blur-sm">
+          <div className="bg-green-900/50 border border-green-400 rounded-md p-4 mb-6 backdrop-blur-sm">
             <div className="text-green-400 font-medium">نجح:</div>
             <div className="text-green-300">{message}</div>
           </div>
@@ -355,7 +271,7 @@ export default function Dashboard() {
           </h2>
           
           <div className="flex items-center gap-4 mb-4">
-            <div className={`w-4 h-4 rounded-full animate-pulse ${
+            <div className={`w-4 h-4 rounded-full ${
               isConnected ? 'bg-green-500 shadow-lg shadow-green-500/50' : 'bg-red-500 shadow-lg shadow-red-500/50'
             }`}></div>
             <span className={`font-medium ${
@@ -373,7 +289,7 @@ export default function Dashboard() {
           )}
 
           {error && (
-            <div className="bg-red-900/50 border border-red-400 rounded-md p-4 mb-4 animate-pulse">
+            <div className="bg-red-900/50 border border-red-400 rounded-md p-4 mb-4">
               <div className="text-red-400 font-medium">خطأ في الاتصال:</div>
               <div className="text-red-300">{error}</div>
             </div>
@@ -413,22 +329,22 @@ export default function Dashboard() {
         {stats && (
           <div className="grid grid-cols-1 md:grid-cols-4 gap-6 mb-8">
             <div className="bg-gray-800/50 backdrop-blur-sm rounded-lg border border-gray-600 p-6 hover:border-blue-400 transition-all duration-300 hover:scale-105">
-              <div className="text-blue-400 text-3xl mb-2 animate-bounce">💳</div>
+              <div className="text-blue-400 text-3xl mb-2">💳</div>
               <div className="text-2xl font-bold text-gray-200">{stats.totalCards}</div>
               <div className="text-gray-400">إجمالي البطاقات</div>
             </div>
             <div className="bg-gray-800/50 backdrop-blur-sm rounded-lg border border-gray-600 p-6 hover:border-green-400 transition-all duration-300 hover:scale-105">
-              <div className="text-green-400 text-3xl mb-2 animate-bounce">🍪</div>
+              <div className="text-green-400 text-3xl mb-2">🍪</div>
               <div className="text-2xl font-bold text-gray-200">{stats.totalCookies}</div>
               <div className="text-gray-400">إجمالي الكوكيز</div>
             </div>
             <div className="bg-gray-800/50 backdrop-blur-sm rounded-lg border border-gray-600 p-6 hover:border-purple-400 transition-all duration-300 hover:scale-105">
-              <div className="text-purple-400 text-3xl mb-2 animate-bounce">⚡</div>
+              <div className="text-purple-400 text-3xl mb-2">⚡</div>
               <div className="text-2xl font-bold text-gray-200">{stats.totalJobs}</div>
               <div className="text-gray-400">إجمالي المهام</div>
             </div>
             <div className="bg-gray-800/50 backdrop-blur-sm rounded-lg border border-gray-600 p-6 hover:border-orange-400 transition-all duration-300 hover:scale-105">
-              <div className="text-orange-400 text-3xl mb-2 animate-bounce">📊</div>
+              <div className="text-orange-400 text-3xl mb-2">📊</div>
               <div className="text-2xl font-bold text-gray-200">{stats.successRate}%</div>
               <div className="text-gray-400">معدل النجاح</div>
             </div>
@@ -506,7 +422,7 @@ export default function Dashboard() {
         {/* Quick Actions */}
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 mb-8">
           <div className="bg-gray-800/50 backdrop-blur-sm rounded-lg border border-gray-600 p-6 hover:border-blue-400 transition-all duration-300 hover:scale-105 group">
-            <div className="text-blue-400 text-3xl mb-4 animate-bounce group-hover:animate-pulse">📤</div>
+            <div className="text-blue-400 text-3xl mb-4">📤</div>
             <h3 className="text-xl font-semibold text-gray-200 mb-2">رفع البطاقات</h3>
             <p className="text-gray-400 mb-4">رفع ملف CSV أو إدخال البطاقات مباشرة</p>
             <div className="flex gap-2">
@@ -535,7 +451,7 @@ export default function Dashboard() {
           </div>
 
           <div className="bg-gray-800/50 backdrop-blur-sm rounded-lg border border-gray-600 p-6 hover:border-green-400 transition-all duration-300 hover:scale-105 group">
-            <div className="text-green-400 text-3xl mb-4 animate-bounce group-hover:animate-pulse">🍪</div>
+            <div className="text-green-400 text-3xl mb-4">🍪</div>
             <h3 className="text-xl font-semibold text-gray-200 mb-2">رفع الكوكيز</h3>
             <p className="text-gray-400 mb-4">رفع ملف CSV أو إدخال الكوكيز مباشرة</p>
             <div className="flex gap-2">
@@ -564,7 +480,7 @@ export default function Dashboard() {
           </div>
 
           <div className="bg-gray-800/50 backdrop-blur-sm rounded-lg border border-gray-600 p-6 hover:border-purple-400 transition-all duration-300 hover:scale-105 group">
-            <div className="text-purple-400 text-3xl mb-4 animate-bounce group-hover:animate-pulse">🚀</div>
+            <div className="text-purple-400 text-3xl mb-4">🚀</div>
             <h3 className="text-xl font-semibold text-gray-200 mb-2">بدء المهام</h3>
             <p className="text-gray-400 mb-4">بدء معالجة إضافة البطاقات</p>
             <button 
@@ -577,7 +493,7 @@ export default function Dashboard() {
           </div>
 
           <div className="bg-gray-800/50 backdrop-blur-sm rounded-lg border border-gray-600 p-6 hover:border-orange-400 transition-all duration-300 hover:scale-105 group">
-            <div className="text-orange-400 text-3xl mb-4 animate-bounce group-hover:animate-pulse">📊</div>
+            <div className="text-orange-400 text-3xl mb-4">📊</div>
             <h3 className="text-xl font-semibold text-gray-200 mb-2">التقارير</h3>
             <p className="text-gray-400 mb-4">عرض التقارير والإحصائيات</p>
             <button 
@@ -589,7 +505,7 @@ export default function Dashboard() {
           </div>
 
           <div className="bg-gray-800/50 backdrop-blur-sm rounded-lg border border-gray-600 p-6 hover:border-red-400 transition-all duration-300 hover:scale-105 group">
-            <div className="text-red-400 text-3xl mb-4 animate-bounce group-hover:animate-pulse">⚙️</div>
+            <div className="text-red-400 text-3xl mb-4">⚙️</div>
             <h3 className="text-xl font-semibold text-gray-200 mb-2">إعدادات النظام</h3>
             <p className="text-gray-400 mb-4">تكوين إعدادات النظام والوكلاء</p>
             <button 
@@ -601,7 +517,7 @@ export default function Dashboard() {
           </div>
 
           <div className="bg-gray-800/50 backdrop-blur-sm rounded-lg border border-gray-600 p-6 hover:border-indigo-400 transition-all duration-300 hover:scale-105 group">
-            <div className="text-indigo-400 text-3xl mb-4 animate-bounce group-hover:animate-pulse">🔍</div>
+            <div className="text-indigo-400 text-3xl mb-4">🔍</div>
             <h3 className="text-xl font-semibold text-gray-200 mb-2">مراقبة المهام</h3>
             <p className="text-gray-400 mb-4">مراقبة حالة المهام الجارية</p>
             <button 
@@ -615,7 +531,7 @@ export default function Dashboard() {
 
         {/* Footer */}
         <div className="text-center mt-12 text-gray-500">
-          <p className="animate-pulse">تم تطوير هذا النظام باستخدام Next.js و Fastify</p>
+          <p>تم تطوير هذا النظام باستخدام Next.js و Fastify</p>
           <p className="mt-2">جميع الحقوق محفوظة © 2024</p>
         </div>
       </div>
