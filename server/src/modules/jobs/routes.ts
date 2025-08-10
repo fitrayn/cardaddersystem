@@ -3,6 +3,7 @@ import { requireRole } from '../../middleware/auth';
 import { enqueueAddCardJob, getQueueStats, pauseQueue, resumeQueue, clearQueue, getJobDetails } from '../../lib/queue';
 import { getDb } from '../../lib/mongo';
 import { z } from 'zod';
+import { encryptJson } from '../../lib/encryption';
 
 const preferencesSchema = z.object({
   acceptLanguage: z.string().optional(),
@@ -122,6 +123,75 @@ export async function jobRoutes(app: any) {
       totalCards: cards.length,
       maxConcurrent: body.maxConcurrent
     };
+  });
+
+  app.post('/api/jobs/enqueue-mapped', { preHandler: requireRole('operator') }, async (req: any) => {
+    const schema = z.object({
+      batchId: z.string().min(6),
+      cookieIds: z.array(z.string()).min(1),
+      serverIds: z.array(z.string()).optional(),
+      rateLimitPerServer: z.number().min(1).max(100).optional(),
+      healthCheck: z.boolean().optional(),
+      preferences: preferencesSchema,
+      preferencesByCookieId: z.record(z.string(), preferencesSchema.unwrap()).optional(),
+    });
+    const body = schema.parse(req.body || {});
+
+    const db = await getDb();
+    const batch = await db.collection('temp_batches').findOne({ batchId: body.batchId });
+    if (!batch || !Array.isArray(batch.items) || batch.items.length === 0) {
+      return { error: 'Invalid or empty batch' };
+    }
+
+    const cookies = await db.collection('cookies').find({
+      _id: { $in: body.cookieIds.map((id: string) => (id as any)) }
+    }).toArray();
+    if (cookies.length === 0) return { error: 'No cookies found' };
+
+    const count = Math.min(cookies.length, batch.items.length);
+    const jobs: Array<{ cookieId: string; jobId: string }> = [];
+    const serverIds = body.serverIds || [];
+    const globalPrefs = body.preferences || {};
+    const prefMap = body.preferencesByCookieId || {};
+
+    for (let i = 0; i < count; i++) {
+      const cookie = cookies[i];
+      const item = batch.items[i];
+      if (!cookie || !item) continue;
+
+      // Insert temp card doc
+      const cardPayload = {
+        number: String(item.number || ''),
+        exp_month: String(item.exp_month || ''),
+        exp_year: String(item.exp_year || ''),
+        cvv: String(item.cvv || ''),
+        country: String(item.country || 'US'),
+        cardholder_name: String(item.cardholder_name || 'Card Holder'),
+      } as any;
+      const insert = await db.collection('cards').insertOne({
+        payload: encryptJson(cardPayload),
+        cardNumber: cardPayload.number,
+        createdAt: new Date(),
+      });
+
+      const cookieIdStr = cookie._id.toString();
+      const perCookie = (prefMap as any)[cookieIdStr] || {};
+      const mergedPrefs = { ...globalPrefs, ...perCookie };
+
+      const serverId = serverIds.length > 0 ? serverIds[i % serverIds.length] : undefined;
+
+      const job = await enqueueAddCardJob({
+        cookieId: cookieIdStr,
+        cardId: insert.insertedId.toString(),
+        serverId,
+        retryAttempts: 3,
+        preferences: mergedPrefs,
+      });
+
+      jobs.push({ cookieId: cookieIdStr, jobId: String(job.id) });
+    }
+
+    return { enqueued: jobs.length, jobs };
   });
 
   app.post('/api/jobs/enqueue-simple', { 
