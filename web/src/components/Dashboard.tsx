@@ -99,7 +99,7 @@ export default function Dashboard() {
 
   const fetchServers = async () => {
     try {
-      const response = await apiClient.get<{ data: Server[] }>('/api/servers/with-metrics');
+      const response = await apiClient.get<{ data: Server[] }>('/api/servers-metrics');
       setServers(response.data || []);
     } catch (err) {
       console.error('Failed to fetch servers:', err);

@@ -300,8 +300,8 @@ export async function serverRoutes(fastify: any) {
     },
   });
 
-  // سيرفرات مع النِسَب
-  fastify.get('/api/servers/with-metrics', {
+  // سيرفرات مع النِسَب (مسار بديل ثابت لتفادي تعارض :id)
+  fastify.get('/api/servers-metrics', {
     preHandler: requireAuth,
     handler: async (request: any, reply: any) => {
       try {
