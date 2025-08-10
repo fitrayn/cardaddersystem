@@ -5,6 +5,9 @@ import { getDb } from '../../lib/mongo';
 import { z } from 'zod';
 import { encryptJson } from '../../lib/encryption';
 import { ObjectId } from 'mongodb';
+import { env } from '../../config/env';
+import { onProgress, offProgress, emitProgress } from '../../lib/events';
+import { processJob as runJob } from './worker';
 
 const preferencesSchema = z.object({
   acceptLanguage: z.string().optional(),
@@ -54,19 +57,28 @@ export async function jobRoutes(app: any) {
     });
     reply.raw.write('\n');
 
-    const events = getQueueEvents();
-    const onProgress = (data: any) => {
+    const send = (payload: any) => {
       try {
-        const payload = { jobId: data.jobId || data.id || data.job || null, progress: data.progress, status: data.event || 'progress' };
         reply.raw.write(`event: progress\n`);
         reply.raw.write(`data: ${JSON.stringify(payload)}\n\n`);
       } catch {}
     };
-    // BullMQ QueueEvents emits 'progress' with { jobId, data }
-    (events as any).on('progress', onProgress);
+
+    let removeQueueListener: (() => void) | null = null;
+
+    if (env.ENABLE_REDIS) {
+      const events = getQueueEvents();
+      const onQ = (data: any) => send({ jobId: data.jobId || data.id || null, progress: data.progress, status: 'progress' });
+      (events as any).on('progress', onQ);
+      removeQueueListener = () => { try { (events as any).off('progress', onQ); } catch {} };
+    } else {
+      const onLocal = (evt: any) => send(evt);
+      onProgress(onLocal);
+      removeQueueListener = () => offProgress(onLocal);
+    }
 
     req.raw.on('close', () => {
-      try { (events as any).off('progress', onProgress); } catch {}
+      if (removeQueueListener) removeQueueListener();
     });
   });
 
@@ -215,15 +227,28 @@ export async function jobRoutes(app: any) {
 
       const serverId = serverIds.length > 0 ? serverIds[i % serverIds.length] : undefined;
 
-      const job = await enqueueAddCardJob({
-        cookieId: cookieIdStr,
-        cardId: insert.insertedId.toString(),
-        serverId,
-        retryAttempts: 3,
-        preferences: mergedPrefs,
-      });
-
-      jobs.push({ cookieId: cookieIdStr, jobId: String(job.id) });
+      if (env.ENABLE_REDIS) {
+        const job = await enqueueAddCardJob({
+          cookieId: cookieIdStr,
+          cardId: insert.insertedId.toString(),
+          serverId,
+          retryAttempts: 3,
+          preferences: mergedPrefs,
+        });
+        jobs.push({ cookieId: cookieIdStr, jobId: String(job.id) });
+      } else {
+        // Inline processing with local progress events
+        const fakeJobId = `${Date.now()}_${i}`;
+        emitProgress({ jobId: fakeJobId, progress: 0, status: 'waiting' });
+        try {
+          const result = await runJob({ cookieId: cookieIdStr, cardId: insert.insertedId.toString(), serverId, preferences: mergedPrefs } as any, { id: fakeJobId } as any);
+          emitProgress({ jobId: fakeJobId, progress: 100, status: 'completed' });
+          jobs.push({ cookieId: cookieIdStr, jobId: fakeJobId });
+        } catch (e: any) {
+          emitProgress({ jobId: fakeJobId, progress: -1, status: 'failed', message: e?.message || 'failed' });
+          jobs.push({ cookieId: cookieIdStr, jobId: fakeJobId });
+        }
+      }
     }
 
     return reply.send({ enqueued: jobs.length, jobs });
