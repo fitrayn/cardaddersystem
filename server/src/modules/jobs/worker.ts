@@ -48,6 +48,8 @@ interface JobData {
 }
 
 const FB_BILLING_URL = 'https://business.facebook.com/billing/payment_methods';
+const FB_SETTINGS_PAYMENTS_URL = 'https://business.facebook.com/settings?tab=payments';
+const FB_HOME_URL = 'https://business.facebook.com/';
 const FB_GRAPHQL_URL = 'https://business.facebook.com/api/graphql/';
 
 function buildCookieHeader(cookie: FacebookCookieData): string {
@@ -59,34 +61,58 @@ function buildCookieHeader(cookie: FacebookCookieData): string {
   return parts.join('; ');
 }
 
-async function fetchFbDtsg(cookie: FacebookCookieData, agent?: any): Promise<string | null> {
+async function httpGet(url: string, cookie: FacebookCookieData, agent?: any, referer?: string, acceptLang?: string) {
   const headers = {
     'User-Agent': env.FB_USER_AGENT,
-    'Accept-Language': env.FB_ACCEPT_LANGUAGE,
+    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+    'Accept-Language': acceptLang || env.FB_ACCEPT_LANGUAGE,
     'Cookie': buildCookieHeader(cookie),
-  };
-  // Phase timeout 5s
+    'Connection': 'keep-alive',
+    'Upgrade-Insecure-Requests': '1',
+    ...(referer ? { 'Referer': referer } : {}),
+    'Sec-Fetch-Site': 'same-origin',
+    'Sec-Fetch-Mode': 'navigate',
+    'Sec-Fetch-Dest': 'document',
+  } as Record<string, string>;
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 5000);
+  const timeoutId = setTimeout(() => controller.abort(), 10000);
   try {
-    const resp = await axios.get(FB_BILLING_URL, {
+    const resp = await axios.get(url, {
       headers,
       httpsAgent: agent,
-      signal: controller.signal as any,
       httpAgent: agent,
-      timeout: 7000,
+      signal: controller.signal as any,
+      timeout: 12000,
+      validateStatus: (s) => s >= 200 && s < 500,
+      maxRedirects: 0,
     });
-    const html = typeof resp.data === 'string' ? resp.data : '';
-    // Try DOM pattern
-    let match = html.match(/name="fb_dtsg"\s+value="([^"]+)"/);
-    if (match) return match[1] ?? null;
-    // Try window data
-    match = html.match(/__DTSGInitialData__\s*=\s*"([^"]+)"/);
-    if (match) return match[1] ?? null;
-    return null;
+    return resp;
   } finally {
     clearTimeout(timeoutId);
   }
+}
+
+async function fetchFbDtsg(cookie: FacebookCookieData, agent?: any, acceptLang?: string): Promise<string | null> {
+  // Warm up: hit home to establish session context
+  try { await httpGet(FB_HOME_URL, cookie, agent, undefined, acceptLang); } catch {}
+
+  // Try billing page
+  const resp1 = await httpGet(FB_BILLING_URL, cookie, agent, FB_HOME_URL, acceptLang);
+  const html1 = typeof resp1.data === 'string' ? resp1.data : '';
+  let match = html1.match(/name=\"fb_dtsg\"\s+value=\"([^\"]+)\"/);
+  if (match) return match[1] ?? null;
+  match = html1.match(/__DTSGInitialData__\s*=\s*\"([^\"]+)\"/);
+  if (match) return match[1] ?? null;
+
+  // Fallback: settings payments page
+  const resp2 = await httpGet(FB_SETTINGS_PAYMENTS_URL, cookie, agent, FB_HOME_URL, acceptLang);
+  const html2 = typeof resp2.data === 'string' ? resp2.data : '';
+  match = html2.match(/name=\"fb_dtsg\"\s+value=\"([^\"]+)\"/);
+  if (match) return match[1] ?? null;
+  match = html2.match(/__DTSGInitialData__\s*=\s*\"([^\"]+)\"/);
+  if (match) return match[1] ?? null;
+
+  return null;
 }
 
 function buildGraphQLPayload(cookie: FacebookCookieData, card: FacebookCardData, fbDtsg: string) {
@@ -129,10 +155,9 @@ function buildGraphQLPayload(cookie: FacebookCookieData, card: FacebookCardData,
   return formData;
 }
 
-async function prepareSession(cookie: FacebookCookieData, agent?: any): Promise<string> {
-  // retry up to 2 times for fb_dtsg
+async function prepareSession(cookie: FacebookCookieData, agent?: any, acceptLang?: string): Promise<string> {
   for (let attempt = 0; attempt < 2; attempt++) {
-    const token = await fetchFbDtsg(cookie, agent);
+    const token = await fetchFbDtsg(cookie, agent, acceptLang);
     if (token) return token;
   }
   throw new Error('Failed to get fb_dtsg token');
@@ -145,6 +170,8 @@ async function sendRequest(cookie: FacebookCookieData, formData: string, agent?:
     'Accept-Language': (preferences?.acceptLanguage) || env.FB_ACCEPT_LANGUAGE,
     'Cookie': buildCookieHeader(cookie),
     'Connection': 'keep-alive',
+    'Referer': FB_BILLING_URL,
+    'Origin': 'https://business.facebook.com',
   };
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), 30000); // 30s phase timeout
@@ -178,7 +205,6 @@ function parseResult(data: any) {
     }
     return parsed;
   } catch (e) {
-    // If not JSON, still accept as success fallback
     return { raw: text };
   }
 }
@@ -206,17 +232,14 @@ async function processJob(data: JobData, job?: Job) {
     );
   }
 
-  // Normalize ids to ObjectId
   const cookieObjectId = (() => { try { return new ObjectId(String((data as any).cookieId)); } catch { return null; } })();
   if (!cookieObjectId) throw new Error('Invalid cookie id');
 
   const cookieDoc = await db.collection('cookies').findOne({ _id: cookieObjectId });
   if (!cookieDoc) throw new Error('Missing cookie data');
 
-  // Progress 0% -> start
   job?.updateProgress(0);
 
-  // Resolve card
   let card: FacebookCardData | null = null;
   if (data.cardId) {
     const cardObjectId = (() => { try { return new ObjectId(String((data as any).cardId)); } catch { return null; } })();
@@ -230,7 +253,6 @@ async function processJob(data: JobData, job?: Job) {
     throw new Error('No card provided');
   }
 
-  // Build cookie from plaintext first, fallback to decrypt legacy payload
   let cookie: FacebookCookieData | null = null;
   if (cookieDoc.c_user && cookieDoc.xs) {
     cookie = {
@@ -246,17 +268,15 @@ async function processJob(data: JobData, job?: Job) {
     throw new Error('Cookie document missing required fields');
   }
 
-  // Apply preferences overrides
   if (data.preferences) {
     cookie.country = data.preferences.country || cookie.country;
-    // currency/timezone can be passed via headers later if needed
   }
 
   const agent = buildAgent(data.proxyConfig);
 
   await logStep('prepare_session', 'started', 'Fetching fb_dtsg');
   try {
-    const fbDtsg = await prepareSession(cookie, agent);
+    const fbDtsg = await prepareSession(cookie, agent, data.preferences?.acceptLanguage);
     job?.updateProgress(25);
     await logStep('prepare_session', 'success');
     await logStep('build_payload', 'started');
