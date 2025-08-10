@@ -48,6 +48,7 @@ try {
 export interface AddCardJobData {
   cookieId: string;
   cardId: string;
+  serverId?: string;
   proxyConfig?: {
     type: 'http' | 'https' | 'socks5';
     host: string;
