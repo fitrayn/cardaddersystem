@@ -274,16 +274,27 @@ async function processJob(data: JobData, job?: Job) {
 
   const agent = buildAgent(data.proxyConfig);
 
+  // Track current phase for precise failure logging
+  let currentPhase: 'prepare_session' | 'build_payload' | 'send_request' = 'prepare_session';
+
   await logStep('prepare_session', 'started', 'Fetching fb_dtsg');
   try {
+    // prepare_session
+    currentPhase = 'prepare_session';
     const fbDtsg = await prepareSession(cookie, agent, data.preferences?.acceptLanguage);
     job?.updateProgress(25);
     await logStep('prepare_session', 'success');
+
+    // build_payload
     await logStep('build_payload', 'started');
+    currentPhase = 'build_payload';
     const formData = buildGraphQLPayload(cookie, card, fbDtsg);
     job?.updateProgress(50);
     await logStep('build_payload', 'success');
+
+    // send_request
     await logStep('send_request', 'started');
+    currentPhase = 'send_request';
     const response = await sendRequest(cookie, formData, agent, data.preferences);
     job?.updateProgress(75);
     await logStep('send_request', 'success', `HTTP ${response.status}`);
@@ -309,7 +320,8 @@ async function processJob(data: JobData, job?: Job) {
 
     return { ok: true };
   } catch (error) {
-    await logStep('send_request', 'failed', (error as any)?.message);
+    // Log failure for the exact phase that failed
+    await logStep(currentPhase, 'failed', (error as any)?.message);
     throw error;
   }
 }
