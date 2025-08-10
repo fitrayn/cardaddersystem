@@ -109,6 +109,9 @@ export async function jobRoutes(app: any) {
     preHandler: requireRole('operator') 
   }, async (req: any) => {
     const db = await getDb();
+    const body = (req.body || {}) as { serverId?: string };
+    const serverId = typeof body.serverId === 'string' ? body.serverId : undefined;
+
     const cookies = await db.collection('cookies').find().toArray();
     const cards = await db.collection('cards').find().toArray();
     
@@ -123,7 +126,8 @@ export async function jobRoutes(app: any) {
       
       await enqueueAddCardJob({ 
         cookieId: cookie._id.toString(), 
-        cardId: card._id.toString() 
+        cardId: card._id.toString(),
+        serverId,
       }, {
         attempts: 3,
         backoff: { type: 'exponential', delay: 2000 }

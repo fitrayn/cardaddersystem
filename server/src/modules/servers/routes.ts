@@ -1,6 +1,7 @@
 import { FastifyInstance } from 'fastify';
 import { ServerService } from './service';
 import { requireAuth } from '../../middleware/auth';
+import { getDb } from '../../lib/mongo';
 
 export async function serverRoutes(fastify: any) {
   // الحصول على جميع السيرفرات للمستخدم
@@ -295,6 +296,38 @@ export async function serverRoutes(fastify: any) {
           success: false,
           error: 'فشل في جلب إحصائيات السيرفرات',
         });
+      }
+    },
+  });
+
+  // سيرفرات مع النِسَب
+  fastify.get('/api/servers/with-metrics', {
+    preHandler: requireAuth,
+    handler: async (request: any, reply: any) => {
+      try {
+        const userId = request.user.id;
+        const servers = await ServerService.getServersByUserId(userId);
+        const db = await getDb();
+        const ids = servers.map(s => s._id?.toString()).filter(Boolean);
+
+        let metrics: Record<string, { total: number; success: number }> = {};
+        if (ids.length > 0) {
+          const agg = await db.collection('job_results').aggregate([
+            { $match: { serverId: { $in: ids } } },
+            { $group: { _id: '$serverId', total: { $sum: 1 }, success: { $sum: { $cond: [{ $eq: ['$success', true] }, 1, 0] } } } }
+          ]).toArray();
+          metrics = Object.fromEntries(agg.map((x: any) => [x._id, { total: x.total, success: x.success }]));
+        }
+
+        const items = servers.map(s => {
+          const m = metrics[s._id?.toString() || ''] || { total: 0, success: 0 };
+          const successRate = m.total > 0 ? Math.round((m.success / m.total) * 100) : 0;
+          return { ...s, successRate };
+        });
+
+        return reply.send({ success: true, data: items });
+      } catch (error) {
+        return reply.status(500).send({ success: false, error: 'فشل في جلب السيرفرات مع الإحصاءات' });
       }
     },
   });

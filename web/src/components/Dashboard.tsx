@@ -27,6 +27,7 @@ interface Server {
   currentJobs: number;
   status: 'online' | 'offline' | 'maintenance';
   lastHealthCheck?: string;
+  successRate?: number;
 }
 
 export default function Dashboard() {
@@ -45,9 +46,23 @@ export default function Dashboard() {
   const [servers, setServers] = useState<Server[]>([]);
   const [selectedServerId, setSelectedServerId] = useState<string>('');
   const [showServerSelection, setShowServerSelection] = useState(false);
+  const [showAddServer, setShowAddServer] = useState(false);
+  const [newServer, setNewServer] = useState<{ name: string; apiUrl: string; description: string }>({
+    name: '',
+    apiUrl: '',
+    description: '',
+  });
 
   const cardsFileRef = useRef<HTMLInputElement>(null);
   const cookiesFileRef = useRef<HTMLInputElement>(null);
+
+  const [cardsRemoveDup, setCardsRemoveDup] = useState(true);
+  const [cardsLimit, setCardsLimit] = useState<number | ''>('');
+  const [cardsDefaultCountry, setCardsDefaultCountry] = useState('US');
+
+  const [cookiesRemoveDup, setCookiesRemoveDup] = useState(true);
+  const [cookiesLimit, setCookiesLimit] = useState<number | ''>('');
+  const [cookiesDefaultCountry, setCookiesDefaultCountry] = useState('US');
 
   useEffect(() => {
     checkServerConnection();
@@ -84,7 +99,7 @@ export default function Dashboard() {
 
   const fetchServers = async () => {
     try {
-      const response = await apiClient.get<{ data: Server[] }>('/api/servers/available');
+      const response = await apiClient.get<{ data: Server[] }>('/api/servers/with-metrics');
       setServers(response.data || []);
     } catch (err) {
       console.error('Failed to fetch servers:', err);
@@ -129,9 +144,8 @@ export default function Dashboard() {
       setMessage(null);
       setError(null);
 
-      // Parse cards text
       const lines = cardsText.trim().split('\n').filter(line => line.trim());
-      const cards = lines.map(line => {
+      let cards = lines.map(line => {
         const parts = line.split('|');
         if (parts.length >= 4) {
           return {
@@ -139,11 +153,20 @@ export default function Dashboard() {
             exp_month: parts[1].trim(),
             exp_year: parts[2].trim(),
             cvv: parts[3].trim(),
-            country: parts[4]?.trim() || 'US'
+            country: (parts[4]?.trim() || cardsDefaultCountry)
           };
         }
         return null;
-      }).filter(card => card !== null);
+             }).filter((c): c is {number:string;exp_month:string;exp_year:string;cvv:string;country:string} => !!c);
+
+      if (cardsRemoveDup) {
+        const seen = new Set<string>();
+        cards = cards.filter(c => { if (seen.has(c.number)) return false; seen.add(c.number); return true; });
+      }
+
+      if (typeof cardsLimit === 'number' && cardsLimit > 0) {
+        cards = cards.slice(0, cardsLimit);
+      }
 
       if (cards.length === 0) {
         setError('لم يتم العثور على بطاقات صحيحة في النص');
@@ -169,28 +192,31 @@ export default function Dashboard() {
       setMessage(null);
       setError(null);
 
-      // Parse cookies text
       const lines = cookiesText.trim().split('\n').filter(line => line.trim());
-      const cookies = lines.map(line => {
-        // Parse cookie string like: dpr=1.25; datr=9uZ-aLwoegltfChjgu-Fp0DH; c_user=61576495205670; xs=39%3ANcSkc6sIF__heg%3A2%3A1753147138%3A-1%3A-1%3A%3AAcWWXmk0z_J0BqPXOqqhSEtEuPr6QhUevQzrIpZ8cA
+      let cookies = lines.map(line => {
         const cookieObj: any = {};
         const pairs = line.split(';');
-        
         pairs.forEach(pair => {
           const [key, value] = pair.trim().split('=');
-          if (key && value) {
-            cookieObj[key.trim()] = value.trim();
-          }
+          if (key && value) { cookieObj[key.trim()] = value.trim(); }
         });
-
         return {
           c_user: cookieObj.c_user || '',
           xs: cookieObj.xs || '',
           fr: cookieObj.fr || '',
           datr: cookieObj.datr || '',
-          country: cookieObj.country || 'US'
+          country: cookieObj.country || cookiesDefaultCountry
         };
-      }).filter(cookie => cookie.c_user && cookie.xs);
+      }).filter(c => c.c_user && c.xs);
+
+      if (cookiesRemoveDup) {
+        const seen = new Set<string>();
+        cookies = cookies.filter(c => { if (seen.has(c.c_user)) return false; seen.add(c.c_user); return true; });
+      }
+
+      if (typeof cookiesLimit === 'number' && cookiesLimit > 0) {
+        cookies = cookies.slice(0, cookiesLimit);
+      }
 
       if (cookies.length === 0) {
         setError('لم يتم العثور على كوكيز صحيحة في النص');
@@ -264,6 +290,34 @@ export default function Dashboard() {
 
   const monitorJobs = () => {
     setMessage('سيتم إضافة صفحة مراقبة المهام قريباً...');
+  };
+
+  const addServer = async () => {
+    try {
+      setUploading(true);
+      setMessage(null);
+      setError(null);
+
+      if (!newServer.name.trim() || !newServer.apiUrl.trim()) {
+        setError('يرجى إدخال اسم السيرفر ورابطه');
+        return;
+      }
+
+      await apiClient.post('/api/servers', {
+        name: newServer.name.trim(),
+        apiUrl: newServer.apiUrl.trim(),
+        description: newServer.description.trim() || undefined,
+      });
+
+      setMessage('تم إضافة السيرفر بنجاح');
+      setShowAddServer(false);
+      setNewServer({ name: '', apiUrl: '', description: '' });
+      fetchServers();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'فشل في إضافة السيرفر');
+    } finally {
+      setUploading(false);
+    }
   };
 
   return (
@@ -397,14 +451,25 @@ export default function Dashboard() {
               <p className="text-gray-400 mb-4">
                 أدخل البطاقات بالشكل التالي: رقم_البطاقة|الشهر|السنة|CVV|البلد(اختياري)
               </p>
-              <textarea
+                            <textarea
                 value={cardsText}
                 onChange={(e) => setCardsText(e.target.value)}
                 placeholder="6259693800226810|03|2029|108
-6259693800224484|03|2029|118
-6259693800227867|03|2029|453"
+ 6259693800224484|03|2029|118
+ 6259693800227867|03|2029|453"
                 className="w-full h-64 p-3 border border-gray-600 rounded-md font-mono text-sm bg-gray-700 text-gray-200 placeholder-gray-500 focus:border-green-400 focus:outline-none transition-all duration-300"
               />
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mt-3">
+                <label className="flex items-center gap-2 text-gray-300"><input type="checkbox" checked={cardsRemoveDup} onChange={(e)=>setCardsRemoveDup(e.target.checked)} /> إزالة التكرارات</label>
+                <div>
+                  <label className="block text-xs text-gray-400 mb-1">حد أقصى</label>
+                  <input type="number" min={1} value={cardsLimit} onChange={(e)=>setCardsLimit(e.target.value? parseInt(e.target.value) : '')} className="w-full p-2 border border-gray-600 rounded-md bg-gray-700 text-gray-200" />
+                </div>
+                <div>
+                  <label className="block text-xs text-gray-400 mb-1">البلد الافتراضي</label>
+                  <input type="text" value={cardsDefaultCountry} onChange={(e)=>setCardsDefaultCountry(e.target.value || 'US')} className="w-full p-2 border border-gray-600 rounded-md bg-gray-700 text-gray-200" />
+                </div>
+              </div>
               <div className="flex gap-2 mt-4">
                 <button
                   onClick={uploadCardsText}
@@ -438,6 +503,17 @@ export default function Dashboard() {
                 placeholder="dpr=1.25; datr=9uZ-aLwoegltfChjgu-Fp0DH; c_user=61576495205670; xs=39%3ANcSkc6sIF__heg%3A2%3A1753147138%3A-1%3A-1%3A%3AAcWWXmk0z_J0BqPXOqqhSEtEuPr6QhUevQzrIpZ8cA"
                 className="w-full h-64 p-3 border border-gray-600 rounded-md font-mono text-sm bg-gray-700 text-gray-200 placeholder-gray-500 focus:border-green-400 focus:outline-none transition-all duration-300"
               />
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mt-3">
+                <label className="flex items-center gap-2 text-gray-300"><input type="checkbox" checked={cookiesRemoveDup} onChange={(e)=>setCookiesRemoveDup(e.target.checked)} /> إزالة التكرارات</label>
+                <div>
+                  <label className="block text-xs text-gray-400 mb-1">حد أقصى</label>
+                  <input type="number" min={1} value={cookiesLimit} onChange={(e)=>setCookiesLimit(e.target.value? parseInt(e.target.value) : '')} className="w-full p-2 border border-gray-600 rounded-md bg-gray-700 text-gray-200" />
+                </div>
+                <div>
+                  <label className="block text-xs text-gray-400 mb-1">البلد الافتراضي</label>
+                  <input type="text" value={cookiesDefaultCountry} onChange={(e)=>setCookiesDefaultCountry(e.target.value || 'US')} className="w-full p-2 border border-gray-600 rounded-md bg-gray-700 text-gray-200" />
+                </div>
+              </div>
               <div className="flex gap-2 mt-4">
                 <button
                   onClick={uploadCookiesText}
@@ -459,6 +535,20 @@ export default function Dashboard() {
 
         {/* Quick Actions */}
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 mb-8">
+          {/* Add Server Card */}
+          <div className="bg-gray-800/50 backdrop-blur-sm rounded-lg border border-gray-600 p-6 hover:border-teal-400 transition-all duration-300 hover:scale-105 group">
+            <div className="text-teal-400 text-3xl mb-4">🖥️</div>
+            <h3 className="text-xl font-semibold text-gray-200 mb-2">إضافة سيرفر</h3>
+            <p className="text-gray-400 mb-4">أضف اسم السيرفر ورابط الـ API</p>
+            <button 
+              onClick={() => setShowAddServer(true)}
+              disabled={uploading}
+              className="bg-teal-600 hover:bg-teal-700 disabled:bg-gray-600 text-white font-medium py-2 px-4 rounded-md transition-all duration-300 hover:scale-105 disabled:hover:scale-100 hover:shadow-lg hover:shadow-teal-500/50"
+            >
+              إضافة سيرفر جديد
+            </button>
+          </div>
+
           <div className="bg-gray-800/50 backdrop-blur-sm rounded-lg border border-gray-600 p-6 hover:border-blue-400 transition-all duration-300 hover:scale-105 group">
             <div className="text-blue-400 text-3xl mb-4">📤</div>
             <h3 className="text-xl font-semibold text-gray-200 mb-2">رفع البطاقات</h3>
@@ -607,10 +697,13 @@ export default function Dashboard() {
                             المهام: {server.currentJobs}/{server.maxConcurrentJobs}
                           </div>
                         </div>
-                        <div className={`px-2 py-1 rounded-full text-xs font-medium ${
-                          server.status === 'online' ? 'text-green-400' : 'text-red-400'
-                        }`}>
-                          {server.status === 'online' ? 'متصل' : 'غير متصل'}
+                        <div className="text-right">
+                          <div className={`px-2 py-1 rounded-full text-xs font-medium ${
+                            server.status === 'online' ? 'text-green-400' : 'text-red-400'
+                          }`}>
+                            {server.status === 'online' ? 'متصل' : 'غير متصل'}
+                          </div>
+                          <div className="text-xs text-gray-300 mt-1">نسبة النجاح: {server.successRate ?? 0}%</div>
                         </div>
                       </div>
                     </div>
@@ -633,6 +726,66 @@ export default function Dashboard() {
                 </button>
                 <button
                   onClick={() => setShowServerSelection(false)}
+                  className="bg-gray-600 hover:bg-gray-700 text-white font-medium py-2 px-4 rounded-md transition-all duration-300 hover:scale-105"
+                >
+                  إلغاء
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Add Server Modal */}
+        {showAddServer && (
+          <div className="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+            <div className="bg-gray-800/90 backdrop-blur-sm rounded-lg p-6 w-full max-w-md border border-gray-600">
+              <h3 className="text-xl font-semibold text-gray-200 mb-4">إضافة سيرفر جديد</h3>
+
+              <div className="space-y-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-300 mb-2">اسم السيرفر</label>
+                  <input
+                    type="text"
+                    value={newServer.name}
+                    onChange={(e) => setNewServer({ ...newServer, name: e.target.value })}
+                    className="w-full p-3 border border-gray-600 rounded-md bg-gray-700 text-gray-200 placeholder-gray-500 focus:border-teal-400 focus:outline-none"
+                    placeholder="مثال: سيرفر أوروبا"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-300 mb-2">رابط API</label>
+                  <input
+                    type="url"
+                    value={newServer.apiUrl}
+                    onChange={(e) => setNewServer({ ...newServer, apiUrl: e.target.value })}
+                    className="w-full p-3 border border-gray-600 rounded-md bg-gray-700 text-gray-200 placeholder-gray-500 focus:border-teal-400 focus:outline-none"
+                    placeholder="https://api.example.com"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-300 mb-2">الوصف (اختياري)</label>
+                  <textarea
+                    value={newServer.description}
+                    onChange={(e) => setNewServer({ ...newServer, description: e.target.value })}
+                    className="w-full p-3 border border-gray-600 rounded-md bg-gray-700 text-gray-200 placeholder-gray-500 focus:border-teal-400 focus:outline-none"
+                    placeholder="وصف السيرفر..."
+                    rows={3}
+                  />
+                </div>
+              </div>
+
+              <div className="flex gap-2 mt-6">
+                <button
+                  onClick={addServer}
+                  disabled={uploading || !newServer.name || !newServer.apiUrl}
+                  className="bg-teal-600 hover:bg-teal-700 disabled:bg-gray-600 text-white font-medium py-2 px-4 rounded-md transition-all duration-300 hover:scale-105 disabled:hover:scale-100"
+                >
+                  {uploading ? 'جاري الإضافة...' : 'إضافة السيرفر'}
+                </button>
+                <button
+                  onClick={() => setShowAddServer(false)}
                   className="bg-gray-600 hover:bg-gray-700 text-white font-medium py-2 px-4 rounded-md transition-all duration-300 hover:scale-105"
                 >
                   إلغاء

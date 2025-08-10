@@ -25,6 +25,7 @@ interface FacebookCookieData {
 interface JobData {
   cookieId: string;
   cardId: string;
+  serverId?: string;
   proxyConfig?: {
     type: 'http' | 'https' | 'socks5';
     host: string;
@@ -140,6 +141,7 @@ async function processJob(data: JobData) {
     await db.collection('job_results').insertOne({
       cookieId: cookieDoc._id,
       cardId: cardDoc._id,
+      serverId: data.serverId || null,
       success: true,
       reason: 'Card added successfully',
       country: card.country || cookie.country || null,
@@ -154,6 +156,7 @@ async function processJob(data: JobData) {
     await db.collection('job_results').insertOne({
       cookieId: cookieDoc._id,
       cardId: cardDoc._id,
+      serverId: data.serverId || null,
       success: false,
       reason: error instanceof Error ? error.message : 'Unknown error',
       country: card.country || cookie.country || null,
