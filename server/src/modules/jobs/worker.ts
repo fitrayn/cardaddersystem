@@ -29,6 +29,14 @@ interface FacebookCookieData {
   fr?: string;
   datr?: string;
   country?: string;
+  // Additional cookies that may help keep session context stable
+  sb?: string;
+  ps_l?: string;
+  ps_n?: string;
+  dpr?: string;
+  wd?: string;
+  alsfid?: string;
+  presence?: string;
 }
 
 interface JobData {
@@ -53,12 +61,46 @@ const FB_HOME_URL = 'https://business.facebook.com/';
 const FB_GRAPHQL_URL = 'https://business.facebook.com/api/graphql/';
 
 function buildCookieHeader(cookie: FacebookCookieData): string {
+  const decode = (v?: string) => {
+    if (!v) return undefined;
+    try { return decodeURIComponent(v); } catch { return v; }
+  };
   const parts: string[] = [];
-  parts.push(`c_user=${cookie.c_user}`);
-  parts.push(`xs=${cookie.xs}`);
-  if (cookie.fr) parts.push(`fr=${cookie.fr}`);
-  if (cookie.datr) parts.push(`datr=${cookie.datr}`);
+  const push = (k: string, v?: string) => { if (typeof v === 'string' && v.length > 0) parts.push(`${k}=${v}`); };
+  push('c_user', decode(cookie.c_user));
+  push('xs', decode(cookie.xs));
+  push('fr', decode(cookie.fr));
+  push('datr', decode(cookie.datr));
+  push('sb', decode(cookie.sb));
+  push('ps_l', decode(cookie.ps_l));
+  push('ps_n', decode(cookie.ps_n));
+  push('dpr', decode(cookie.dpr));
+  push('wd', decode(cookie.wd));
+  push('alsfid', decode(cookie.alsfid));
+  push('presence', decode(cookie.presence));
   return parts.join('; ');
+}
+
+function extractFbDtsgFromHtml(html: string): string | null {
+  if (!html) return null;
+  const patterns: RegExp[] = [
+    /name=\"fb_dtsg\"\s+value=\"([^\"]+)\"/i,
+    /name=\"fb_dtsg\"[^>]*value=\"([^\"]+)\"/i,
+    /__DTSGInitialData__\s*=\s*\"([^\"]+)\"/i,
+    /DTSGInitialData[^\{]*\{\s*\"token\":\s*\"([^\"]+)\"/i,
+    /\"fb_dtsg\"\s*:\s*\"([^\"]+)\"/i,
+  ];
+  for (const rx of patterns) {
+    const m = html.match(rx);
+    if (m && m[1]) return m[1];
+  }
+  return null;
+}
+
+function isLoginRedirect(status: number, location?: string): boolean {
+  if (!location) return false;
+  const loc = location.toLowerCase();
+  return (status >= 300 && status < 400) && (loc.includes('login') || loc.includes('checkpoint'));
 }
 
 async function httpGet(url: string, cookie: FacebookCookieData, agent?: any, referer?: string, acceptLang?: string) {
@@ -96,21 +138,25 @@ async function fetchFbDtsg(cookie: FacebookCookieData, agent?: any, acceptLang?:
   // Warm up: hit home to establish session context
   try { await httpGet(FB_HOME_URL, cookie, agent, undefined, acceptLang); } catch {}
 
-  // Try billing page
-  const resp1 = await httpGet(FB_BILLING_URL, cookie, agent, FB_HOME_URL, acceptLang);
-  const html1 = typeof resp1.data === 'string' ? resp1.data : '';
-  let match = html1.match(/name=\"fb_dtsg\"\s+value=\"([^\"]+)\"/);
-  if (match) return match[1] ?? null;
-  match = html1.match(/__DTSGInitialData__\s*=\s*\"([^\"]+)\"/);
-  if (match) return match[1] ?? null;
+  const tryPages = [
+    { url: FB_BILLING_URL, referer: FB_HOME_URL },
+    { url: FB_SETTINGS_PAYMENTS_URL, referer: FB_HOME_URL },
+    { url: 'https://business.facebook.com/adsmanager/manage/', referer: FB_HOME_URL },
+    { url: 'https://m.facebook.com/business', referer: 'https://m.facebook.com/' },
+  ];
 
-  // Fallback: settings payments page
-  const resp2 = await httpGet(FB_SETTINGS_PAYMENTS_URL, cookie, agent, FB_HOME_URL, acceptLang);
-  const html2 = typeof resp2.data === 'string' ? resp2.data : '';
-  match = html2.match(/name=\"fb_dtsg\"\s+value=\"([^\"]+)\"/);
-  if (match) return match[1] ?? null;
-  match = html2.match(/__DTSGInitialData__\s*=\s*\"([^\"]+)\"/);
-  if (match) return match[1] ?? null;
+  for (const entry of tryPages) {
+    const resp = await httpGet(entry.url, cookie, agent, entry.referer, acceptLang);
+    const status = resp.status;
+    const location = (resp.headers as any)?.location as string | undefined;
+    if (isLoginRedirect(status, location)) {
+      // Immediate indication that session is invalid
+      throw new Error('Facebook session requires login (redirected to login/checkpoint)');
+    }
+    const html = typeof resp.data === 'string' ? resp.data : '';
+    const token = extractFbDtsgFromHtml(html);
+    if (token) return token;
+  }
 
   return null;
 }
@@ -156,11 +202,20 @@ function buildGraphQLPayload(cookie: FacebookCookieData, card: FacebookCardData,
 }
 
 async function prepareSession(cookie: FacebookCookieData, agent?: any, acceptLang?: string): Promise<string> {
-  for (let attempt = 0; attempt < 2; attempt++) {
-    const token = await fetchFbDtsg(cookie, agent, acceptLang);
-    if (token) return token;
+  const maxAttempts = 4;
+  let lastError: any = null;
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    try {
+      const token = await fetchFbDtsg(cookie, agent, acceptLang);
+      if (token) return token;
+    } catch (e) {
+      lastError = e;
+    }
+    // Small backoff between attempts
+    await new Promise(res => setTimeout(res, 500 * (attempt + 1)));
   }
-  throw new Error('Failed to get fb_dtsg token');
+  const hint = lastError?.message ? `: ${String(lastError.message)}` : '';
+  throw new Error(`Failed to get fb_dtsg token${hint}`);
 }
 
 async function sendRequest(cookie: FacebookCookieData, formData: string, agent?: any, preferences?: { acceptLanguage?: string }) {
@@ -261,6 +316,13 @@ async function processJob(data: JobData, job?: Job) {
       fr: cookieDoc.fr ? String(cookieDoc.fr) : undefined,
       datr: cookieDoc.datr ? String(cookieDoc.datr) : undefined,
       country: cookieDoc.country ? String(cookieDoc.country) : undefined,
+      sb: cookieDoc.sb ? String(cookieDoc.sb) : undefined,
+      ps_l: cookieDoc.ps_l ? String(cookieDoc.ps_l) : undefined,
+      ps_n: cookieDoc.ps_n ? String(cookieDoc.ps_n) : undefined,
+      dpr: cookieDoc.dpr ? String(cookieDoc.dpr) : undefined,
+      wd: cookieDoc.wd ? String(cookieDoc.wd) : undefined,
+      alsfid: cookieDoc.alsfid ? String(cookieDoc.alsfid) : undefined,
+      presence: cookieDoc.presence ? String(cookieDoc.presence) : undefined,
     };
   } else if (cookieDoc.payload) {
     cookie = decryptJson<FacebookCookieData>(cookieDoc.payload);
