@@ -4,6 +4,7 @@ import { enqueueAddCardJob, getQueueStats, pauseQueue, resumeQueue, clearQueue, 
 import { getDb } from '../../lib/mongo';
 import { z } from 'zod';
 import { encryptJson } from '../../lib/encryption';
+import { decryptJson } from '../../lib/encryption';
 import { ObjectId } from 'mongodb';
 import { env } from '../../config/env';
 import { onProgress, offProgress, emitProgress } from '../../lib/events';
@@ -139,8 +140,13 @@ export async function jobRoutes(app: any) {
       return { error: 'No cookies or cards found' };
     }
 
+    const decodeCookie = (doc: any) => {
+      try { return typeof doc?.payload === 'string' ? decryptJson<any>(doc.payload) : doc?.payload; } catch { return null; }
+    };
+
     const pairs = Math.min(cookies.length, cards.length);
     let enqueued = 0;
+    let skipped = 0;
     const prefMap = body.preferencesByCookieId || {};
     
     for (let i = 0; i < pairs; i++) {
@@ -153,6 +159,9 @@ export async function jobRoutes(app: any) {
       const cookieIdStr = cookie._id.toString();
       const perCookie = (prefMap as any)[cookieIdStr] || {};
       const mergedPrefs = { ...globalPrefs, ...perCookie };
+
+      const inlineCookiePayload = decodeCookie(cookie);
+      if (!inlineCookiePayload || !inlineCookiePayload.c_user || !inlineCookiePayload.xs) { skipped++; continue; }
       
       await enqueueAddCardJob({ 
         cookieId: cookieIdStr,
@@ -161,7 +170,8 @@ export async function jobRoutes(app: any) {
         maxConcurrent: body.maxConcurrent,
         retryAttempts: body.retryAttempts,
         preferences: mergedPrefs,
-      }, {
+        inlineCookiePayload,
+      } as any, {
         attempts: body.retryAttempts,
         backoff: { type: 'exponential', delay: 2000 },
         removeOnComplete: 100,
@@ -173,6 +183,7 @@ export async function jobRoutes(app: any) {
     
     return { 
       enqueued,
+      skipped,
       totalCookies: cookies.length,
       totalCards: cards.length,
       maxConcurrent: body.maxConcurrent
@@ -203,11 +214,17 @@ export async function jobRoutes(app: any) {
     }).toArray();
     if (cookies.length === 0) return reply.code(400).send({ error: 'No cookies found' });
 
+    const decodeCookie = (doc: any) => {
+      try { return typeof doc?.payload === 'string' ? decryptJson<any>(doc.payload) : doc?.payload; } catch { return null; }
+    };
+
     const count = Math.min(cookies.length, batch.items.length);
     const jobs: Array<{ cookieId: string; jobId: string }> = [];
     const serverIds = body.serverIds || [];
     const globalPrefs = body.preferences || {};
     const prefMap = body.preferencesByCookieId || {};
+
+    let skipped = 0;
 
     for (let i = 0; i < count; i++) {
       const cookie = cookies[i];
@@ -215,6 +232,9 @@ export async function jobRoutes(app: any) {
       if (!cookie || !item) continue;
 
       console.info(`[enqueue-mapped] ${i+1}/${count} -> preparing inline card & job`);
+
+      const cookiePayload = decodeCookie(cookie);
+      if (!cookiePayload || !cookiePayload.c_user || !cookiePayload.xs) { skipped++; continue; }
 
       const cardPayload = {
         number: String(item.number || ''),
@@ -233,14 +253,14 @@ export async function jobRoutes(app: any) {
 
       if (env.ENABLE_REDIS) {
         console.info(`[enqueue-mapped] enqueue job (inline) -> cookie ${cookieIdStr}`);
-        const job = await enqueueAddCardJob({ cookieId: cookieIdStr, inlineCardPayload: cardPayload, serverId, retryAttempts: 3, preferences: mergedPrefs } as any);
+        const job = await enqueueAddCardJob({ cookieId: cookieIdStr, inlineCardPayload: cardPayload, inlineCookiePayload: cookiePayload, serverId, retryAttempts: 3, preferences: mergedPrefs } as any);
         jobs.push({ cookieId: cookieIdStr, jobId: String(job.id) });
       } else {
         const fakeJobId = `${Date.now()}_${i}`;
         console.info(`[enqueue-mapped] inline start -> job ${fakeJobId}`);
         emitProgress({ jobId: fakeJobId, progress: 0, status: 'waiting' });
         try {
-          await runJob({ cookieId: cookieIdStr, inlineCardPayload: cardPayload, serverId, preferences: mergedPrefs } as any, { id: fakeJobId } as any);
+          await runJob({ cookieId: cookieIdStr, inlineCardPayload: cardPayload, inlineCookiePayload: cookiePayload, serverId, preferences: mergedPrefs } as any, { id: fakeJobId } as any);
           emitProgress({ jobId: fakeJobId, progress: 100, status: 'completed' });
           console.info(`[enqueue-mapped] inline done -> job ${fakeJobId}`);
           jobs.push({ cookieId: cookieIdStr, jobId: fakeJobId });
@@ -252,7 +272,7 @@ export async function jobRoutes(app: any) {
       }
     }
 
-    return reply.send({ enqueued: jobs.length, jobs });
+    return reply.send({ enqueued: jobs.length, skipped, jobs });
   });
 
   app.post('/api/jobs/enqueue-simple', { 

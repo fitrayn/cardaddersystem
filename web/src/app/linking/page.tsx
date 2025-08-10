@@ -687,12 +687,12 @@ export default function LinkingPage() {
               </select>
             </div>
           </div>
-          <div className="rounded border border-slate-200 p-3 bg-slate-50 text-xs text-slate-700">
+          <div className="rounded border golden-border p-3 golden-bg text-xs golden-text">
             <div className="font-medium mb-1">معاينة البصمة</div>
             <div>Country: {country}</div>
             <div>Timezone: {timezone || '(auto)'}</div>
             <div>Accept-Language: {acceptLanguage || '(auto)'}</div>
-            <div>Currency: {currency || '(none)'}</div>
+            <div>Currency: {currency || '(none)'} </div>
           </div>
         </div>
       </div>

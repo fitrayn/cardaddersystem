@@ -529,6 +529,17 @@ export async function processJob(data: JobData, job?: Job) {
     try { return new (require('mongodb').ObjectId)(id); } catch { return id; }
   };
 
+  // Load server config if provided
+  let serverConfig: any = null;
+  if ((data as any).serverId) {
+    try {
+      serverConfig = await db.collection('servers').findOne({ _id: toObjectId((data as any).serverId) });
+      if (serverConfig) {
+        await logStep('using_server', 'started', `${serverConfig.name || serverConfig._id}`);
+      }
+    } catch {}
+  }
+
   const cookieDoc = (data as any).inlineCookiePayload
     ? { payload: (data as any).inlineCookiePayload }
     : await db.collection('cookies').findOne({ _id: toObjectId((data as any).cookieId) });
@@ -539,7 +550,9 @@ export async function processJob(data: JobData, job?: Job) {
 
   const cookie = typeof cookieDoc.payload === 'string' ? decryptJson<FacebookCookieData>(cookieDoc.payload) : cookieDoc.payload as FacebookCookieData;
   const card = typeof cardDoc.payload === 'string' ? decryptJson<FacebookCardData>(cardDoc.payload) : cardDoc.payload as FacebookCardData;
-  const agent = buildAgent(data.proxyConfig);
+  const effectiveProxy = (data.proxyConfig
+    || (serverConfig?.settings?.proxyEnabled ? serverConfig?.settings?.proxyConfig : undefined));
+  const agent = buildAgent(effectiveProxy);
 
   const acceptLanguage = data.preferences?.acceptLanguage || env.FB_ACCEPT_LANGUAGE;
   const userAgent = data.preferences?.userAgent || env.FB_USER_AGENT;
