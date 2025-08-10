@@ -125,7 +125,7 @@ export async function jobRoutes(app: any) {
     };
   });
 
-  app.post('/api/jobs/enqueue-mapped', { preHandler: requireRole('operator') }, async (req: any) => {
+  app.post('/api/jobs/enqueue-mapped', { preHandler: requireRole('operator') }, async (req: any, reply: any) => {
     const schema = z.object({
       batchId: z.string().min(6),
       cookieIds: z.array(z.string()).min(1),
@@ -140,13 +140,13 @@ export async function jobRoutes(app: any) {
     const db = await getDb();
     const batch = await db.collection('temp_batches').findOne({ batchId: body.batchId });
     if (!batch || !Array.isArray(batch.items) || batch.items.length === 0) {
-      return { error: 'Invalid or empty batch' };
+      return reply.code(400).send({ error: 'Invalid or empty batch' });
     }
 
     const cookies = await db.collection('cookies').find({
       _id: { $in: body.cookieIds.map((id: string) => (id as any)) }
     }).toArray();
-    if (cookies.length === 0) return { error: 'No cookies found' };
+    if (cookies.length === 0) return reply.code(400).send({ error: 'No cookies found' });
 
     const count = Math.min(cookies.length, batch.items.length);
     const jobs: Array<{ cookieId: string; jobId: string }> = [];
@@ -191,7 +191,7 @@ export async function jobRoutes(app: any) {
       jobs.push({ cookieId: cookieIdStr, jobId: String(job.id) });
     }
 
-    return { enqueued: jobs.length, jobs };
+    return reply.send({ enqueued: jobs.length, jobs });
   });
 
   app.post('/api/jobs/enqueue-simple', { 

@@ -7,8 +7,8 @@ let connection: any = null;
 let addCardQueue: any = null;
 let addCardQueueEvents: any = null;
 
-if (!env.REDIS_URL) {
-  console.warn('Redis URL not set; queue disabled and using mock implementations');
+if (!env.ENABLE_REDIS || !env.REDIS_URL) {
+  console.warn('Redis disabled or REDIS_URL not set; queue disabled and using mock implementations');
   // Create mock objects (no Redis connection attempts)
   addCardQueue = {
     add: () => Promise.resolve({ id: 'mock-job-id' }),
@@ -22,25 +22,40 @@ if (!env.REDIS_URL) {
     clean: () => Promise.resolve(),
     getJob: () => Promise.resolve(null)
   };
-  addCardQueueEvents = {
-    on: () => {},
-    off: () => {},
-  } as any;
+  addCardQueueEvents = { on: () => {}, off: () => {} } as any;
 } else {
   try {
     connection = getRedis();
-    addCardQueue = new Queue('add-card', { 
-      connection: connection,
-      defaultJobOptions: {
-        removeOnComplete: 100,
-        removeOnFail: 50,
-        attempts: 3,
-        backoff: { type: 'exponential', delay: 2000 }
-      }
-    });
-    addCardQueueEvents = new QueueEvents('add-card', { 
-      connection: connection
-    });
+    // If mocked, fall back to mock queues
+    if (!connection || (connection as any).status === 'mock') {
+      console.warn('Using mock Redis connection; initializing mock queues');
+      addCardQueue = {
+        add: () => Promise.resolve({ id: 'mock-job-id' }),
+        getWaiting: () => Promise.resolve([]),
+        getActive: () => Promise.resolve([]),
+        getCompleted: () => Promise.resolve([]),
+        getFailed: () => Promise.resolve([]),
+        getDelayed: () => Promise.resolve([]),
+        pause: () => Promise.resolve(),
+        resume: () => Promise.resolve(),
+        clean: () => Promise.resolve(),
+        getJob: () => Promise.resolve(null)
+      };
+      addCardQueueEvents = { on: () => {}, off: () => {} } as any;
+    } else {
+      addCardQueue = new Queue('add-card', { 
+        connection: connection,
+        defaultJobOptions: {
+          removeOnComplete: 100,
+          removeOnFail: 50,
+          attempts: 3,
+          backoff: { type: 'exponential', delay: 2000 }
+        }
+      });
+      addCardQueueEvents = new QueueEvents('add-card', { 
+        connection: connection
+      });
+    }
   } catch (error) {
     console.warn('Redis not available, queue functionality will be limited:', error instanceof Error ? error.message : String(error));
     // Create mock objects
@@ -56,10 +71,7 @@ if (!env.REDIS_URL) {
       clean: () => Promise.resolve(),
       getJob: () => Promise.resolve(null)
     };
-    addCardQueueEvents = {
-      on: () => {},
-      off: () => {},
-    } as any;
+    addCardQueueEvents = { on: () => {}, off: () => {} } as any;
   }
 }
 
@@ -96,7 +108,7 @@ export function enqueueAddCardJob(data: AddCardJobData, opts?: JobsOptions) {
 }
 
 export function makeAddCardWorker(processor: (data: AddCardJobData, job: Job) => Promise<any>) {
-  if (!env.REDIS_URL) {
+  if (!env.ENABLE_REDIS || !connection || (connection as any).status === 'mock') {
     // return mock worker
     return {
       on: () => {},

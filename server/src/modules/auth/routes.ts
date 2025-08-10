@@ -1,7 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { UserService } from '../../lib/services/userService';
-import { signToken } from '../../middleware/auth';
+import { signToken, requireAuth } from '../../middleware/auth';
 
 const signupSchema = z.object({ email: z.string().email(), password: z.string().min(8), role: z.enum(['admin', 'user', 'operator']).default('user') });
 const loginSchema = z.object({ email: z.string().email(), password: z.string().min(8) });
@@ -48,5 +48,17 @@ export async function authRoutes(app: any) {
     const userId = user._id?.toString() ?? 'unknown';
     const token = signToken({ id: userId, role: user.role });
     return { token };
+  });
+
+  app.get('/api/auth/me', { preHandler: requireAuth }, async (req: any, reply: any) => {
+    try {
+      const userId = req.user?.id as string | undefined;
+      if (!userId) return reply.code(401).send({ error: 'Unauthorized' });
+      const user = await userService.findUserById(userId);
+      if (!user) return reply.code(404).send({ error: 'User not found' });
+      return reply.send({ id: user._id?.toString() || userId, email: user.email, role: user.role });
+    } catch (e) {
+      return reply.code(500).send({ error: 'Failed to load profile' });
+    }
   });
 } 

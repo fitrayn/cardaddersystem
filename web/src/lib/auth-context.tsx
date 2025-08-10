@@ -27,13 +27,24 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    // Check for existing token on mount
+    // Restore token and user on mount
     const savedToken = localStorage.getItem('auth_token');
+    const savedUser = localStorage.getItem('auth_user');
     if (savedToken) {
       setToken(savedToken);
       apiClient.setAuthToken(savedToken);
-      // TODO: Validate token with server
-      setIsLoading(false);
+      try {
+        if (savedUser) setUser(JSON.parse(savedUser));
+      } catch {}
+      // Optionally validate token and refresh user profile
+      (async () => {
+        try {
+          const me = await apiClient.get<{ id: string; email: string; role: 'admin' | 'operator' }>(`/api/auth/me`);
+          setUser({ id: me.id, email: me.email, role: me.role });
+          localStorage.setItem('auth_user', JSON.stringify(me));
+        } catch {}
+        setIsLoading(false);
+      })();
     } else {
       setIsLoading(false);
     }
@@ -43,24 +54,21 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     try {
       setIsLoading(true);
       setError(null);
-      
-      const response = await apiClient.post<{ token: string }>('/api/auth/login', { email, password });
-      
+      const response = await apiClient.post<{ token: string }>(`/api/auth/login`, { email, password });
       if (response.token) {
         setToken(response.token);
         apiClient.setAuthToken(response.token);
         localStorage.setItem('auth_token', response.token);
-        
-        // TODO: Fetch user profile
-        setUser({
-          id: 'temp-id',
-          email,
-          role: 'operator' // Default role, should come from server
-        });
-        
+        // Fetch user profile after login
+        try {
+          const me = await apiClient.get<{ id: string; email: string; role: 'admin' | 'operator' }>(`/api/auth/me`);
+          setUser({ id: me.id, email: me.email, role: me.role });
+          localStorage.setItem('auth_user', JSON.stringify(me));
+        } catch {
+          setUser({ id: 'temp-id', email, role: 'operator' });
+        }
         return true;
       }
-      
       return false;
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : 'فشل تسجيل الدخول';
@@ -76,6 +84,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setToken(null);
     apiClient.clearAuthToken();
     localStorage.removeItem('auth_token');
+    localStorage.removeItem('auth_user');
   };
 
   const value: AuthContextType = {
