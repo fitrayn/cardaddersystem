@@ -1,14 +1,27 @@
 import crypto from 'node:crypto';
+import { env } from '../config/env';
 
 const keyB64 = process.env.AES_KEY_BASE64 || '';
 const ivB64 = process.env.AES_IV_BASE64 || '';
 
-function getKeyAndIv() {
-  const key = Buffer.from(keyB64, 'base64');
-  const iv = Buffer.from(ivB64, 'base64');
-  if (key.length !== 32) throw new Error('AES key must be 32 bytes (base64 of 32 bytes)');
-  if (iv.length !== 16) throw new Error('AES IV must be 16 bytes (base64 of 16 bytes)');
+function deriveKeyAndIvFromSecret() {
+  const secret = env.JWT_SECRET || 'default_fallback_secret';
+  const key = crypto.createHash('sha256').update(secret).digest(); // 32 bytes
+  const iv = crypto.createHash('sha1').update(secret + ':iv').digest().subarray(0, 16); // 16 bytes
   return { key, iv };
+}
+
+function getKeyAndIv() {
+  try {
+    const key = Buffer.from(keyB64, 'base64');
+    const iv = Buffer.from(ivB64, 'base64');
+    if (key.length !== 32) throw new Error('AES key must be 32 bytes (base64 of 32 bytes)');
+    if (iv.length !== 16) throw new Error('AES IV must be 16 bytes (base64 of 16 bytes)');
+    return { key, iv };
+  } catch (e) {
+    console.warn('[encryption] Invalid AES env values, falling back to derived key/iv:', (e as Error).message);
+    return deriveKeyAndIvFromSecret();
+  }
 }
 
 export function encryptJson<T>(data: T): string {

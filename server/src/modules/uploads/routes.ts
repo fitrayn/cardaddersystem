@@ -45,7 +45,7 @@ export async function uploadRoutes(app: any) {
       if (error instanceof z.ZodError) {
         return reply.code(400).send({ error: 'Invalid cookie data format', details: error.issues });
       }
-      return reply.code(500).send({ error: 'Internal server error' });
+      return reply.code(500).send({ error: 'Internal server error', message: (error as Error).message });
     }
   });
 
@@ -75,7 +75,7 @@ export async function uploadRoutes(app: any) {
       if (error instanceof z.ZodError) {
         return reply.code(400).send({ error: 'Invalid card data format', details: error.issues });
       }
-      return reply.code(500).send({ error: 'Internal server error' });
+      return reply.code(500).send({ error: 'Internal server error', message: (error as Error).message });
     }
   });
 
