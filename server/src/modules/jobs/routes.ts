@@ -4,6 +4,21 @@ import { enqueueAddCardJob, getQueueStats, pauseQueue, resumeQueue, clearQueue, 
 import { getDb } from '../../lib/mongo';
 import { z } from 'zod';
 
+const preferencesSchema = z.object({
+  acceptLanguage: z.string().optional(),
+  userAgent: z.string().optional(),
+  businessId: z.string().optional(),
+  origin: z.string().optional(),
+  referer: z.string().optional(),
+  xFbUplSessionId: z.string().optional(),
+  xBhFlowSessionId: z.string().optional(),
+  platformTrustToken: z.string().optional(),
+  e2eeNumber: z.string().optional(),
+  e2eeCsc: z.string().optional(),
+  adAccountId: z.string().optional(),
+  usePrimaryAdAccount: z.boolean().optional(),
+}).optional();
+
 const enqueueJobSchema = z.object({
   cookieIds: z.array(z.string()),
   cardIds: z.array(z.string()),
@@ -16,7 +31,8 @@ const enqueueJobSchema = z.object({
     country: z.string().optional()
   })).optional(),
   maxConcurrent: z.number().min(1).max(50).default(10),
-  retryAttempts: z.number().min(1).max(5).default(3)
+  retryAttempts: z.number().min(1).max(5).default(3),
+  preferences: preferencesSchema,
 });
 
 export async function jobRoutes(app: any) {
@@ -44,7 +60,8 @@ export async function jobRoutes(app: any) {
             }
           },
           maxConcurrent: { type: 'number', minimum: 1, maximum: 50, default: 10 },
-          retryAttempts: { type: 'number', minimum: 1, maximum: 5, default: 3 }
+          retryAttempts: { type: 'number', minimum: 1, maximum: 5, default: 3 },
+          preferences: { type: 'object' },
         },
         required: ['cookieIds', 'cardIds']
       }
@@ -84,7 +101,8 @@ export async function jobRoutes(app: any) {
         cardId: card._id.toString(),
         proxyConfig,
         maxConcurrent: body.maxConcurrent,
-        retryAttempts: body.retryAttempts
+        retryAttempts: body.retryAttempts,
+        preferences: body.preferences,
       };
       
       await enqueueAddCardJob(jobData, {

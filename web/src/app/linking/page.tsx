@@ -108,6 +108,10 @@ export default function LinkingPage() {
   const [acceptLanguage, setAcceptLanguage] = useState('');
   const [currency, setCurrency] = useState<string>('');
 
+  // Linking target prefs
+  const [usePrimaryAdAccount, setUsePrimaryAdAccount] = useState<boolean>(true);
+  const [manualAdAccountId, setManualAdAccountId] = useState<string>('');
+
   // Derived options for dropdowns
   const languageOptions = useMemo(() => FB_LANGS[country] || ['en-US,en;q=0.9'], [country]);
   const timezoneOptions = useMemo(() => FB_TZS[country] || ['UTC'], [country]);
@@ -313,6 +317,13 @@ export default function LinkingPage() {
       setBusy(true);
       try {
         const payload: any = { cookieIds: selectedCookieIds, cardIds: selectedCardIds };
+        const prefs: any = {};
+        if (!usePrimaryAdAccount && manualAdAccountId.trim()) {
+          prefs.adAccountId = manualAdAccountId.trim();
+        } else {
+          prefs.usePrimaryAdAccount = true;
+        }
+        payload.preferences = prefs;
         const res = await apiClient.post<{ enqueued: number; jobs: Array<{ cookieId: string; jobId: string }> }>(`/api/jobs/enqueue`, payload);
         // Build mapping and init progress/status then start SSE
         const mapping: Record<string, string> = {};
@@ -355,6 +366,11 @@ export default function LinkingPage() {
         acceptLanguage,
       };
       if (currency) prefs.currency = currency;
+      if (!usePrimaryAdAccount && manualAdAccountId.trim()) {
+        prefs.adAccountId = manualAdAccountId.trim();
+      } else {
+        prefs.usePrimaryAdAccount = true;
+      }
 
       const res = await apiClient.post<EnqueueMappedResponse>(`/api/jobs/enqueue-mapped`, {
         batchId,
@@ -517,6 +533,24 @@ export default function LinkingPage() {
       {/* Control section: Start linking */}
       <div className="p-4 rounded-lg border border-slate-200 bg-white mb-6">
         <h2 className="font-semibold mb-3 text-slate-800">التحكم</h2>
+        <div className="grid md:grid-cols-3 gap-4 mb-3">
+          <div className="space-y-2">
+            <label className="flex items-center gap-2 text-sm text-slate-700">
+              <input type="checkbox" checked={usePrimaryAdAccount} onChange={e => setUsePrimaryAdAccount(e.target.checked)} />
+              ربط على الحساب الأساسي
+            </label>
+            <div>
+              <label className="block text-xs text-slate-700">Ad Account ID (act_...)</label>
+              <input className="w-full border rounded px-3 py-2" placeholder="act_123... أو 123..." value={manualAdAccountId} onChange={e => setManualAdAccountId(e.target.value)} disabled={usePrimaryAdAccount} />
+            </div>
+          </div>
+          <div className="space-y-2">
+            <label className="block text-xs text-slate-700">السيرفرات المختارة</label>
+            <div className="text-sm text-slate-700">{selectedServerIds.length} سيرفر</div>
+            <label className="block text-xs text-slate-700">الكوكيز المختارة</label>
+            <div className="text-sm text-slate-700">{selectedCookieIds.length} كوكي</div>
+          </div>
+        </div>
         <div className="flex flex-wrap items-center gap-3">
           <button
             disabled={(selectedCookieIds.length === 0) || (selectedCardIds.length === 0 && !batchId) || busy}
