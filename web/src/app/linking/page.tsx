@@ -21,6 +21,52 @@ const COUNTRY_PRESETS: Record<string, { tz: string; lang: string; currency?: str
   BR: { tz: 'America/Sao_Paulo', lang: 'pt-BR,pt;q=0.9,en-US;q=0.8', currency: 'BRL' },
 };
 
+// Curated options per country
+const FB_LANGS: Record<string, string[]> = {
+  EG: ['ar-EG,ar;q=0.9,en-US;q=0.8', 'en-US,en;q=0.9'],
+  SA: ['ar-SA,ar;q=0.9,en-US;q=0.8', 'en-US,en;q=0.9'],
+  AE: ['ar-AE,ar;q=0.9,en-US;q=0.8', 'en-US,en;q=0.9'],
+  MA: ['ar-MA,ar;q=0.9,fr-FR;q=0.8,en-US;q=0.7', 'fr-FR,fr;q=0.9,en-US;q=0.8'],
+  US: ['en-US,en;q=0.9'],
+  GB: ['en-GB,en;q=0.9'],
+  FR: ['fr-FR,fr;q=0.9,en-US;q=0.8'],
+  DE: ['de-DE,de;q=0.9,en-US;q=0.8'],
+  TR: ['tr-TR,tr;q=0.9,en-US;q=0.8'],
+  IN: ['en-IN,en;q=0.9,hi-IN;q=0.7', 'hi-IN,hi;q=0.9,en-US;q=0.8'],
+  ID: ['id-ID,id;q=0.9,en-US;q=0.8'],
+  BR: ['pt-BR,pt;q=0.9,en-US;q=0.8'],
+};
+
+const FB_TZS: Record<string, string[]> = {
+  EG: ['Africa/Cairo'],
+  SA: ['Asia/Riyadh'],
+  AE: ['Asia/Dubai'],
+  MA: ['Africa/Casablanca'],
+  US: ['America/New_York', 'America/Chicago', 'America/Los_Angeles'],
+  GB: ['Europe/London'],
+  FR: ['Europe/Paris'],
+  DE: ['Europe/Berlin'],
+  TR: ['Europe/Istanbul'],
+  IN: ['Asia/Kolkata'],
+  ID: ['Asia/Jakarta'],
+  BR: ['America/Sao_Paulo'],
+};
+
+const FB_CURRENCIES: Record<string, string[]> = {
+  EG: ['EGP'],
+  SA: ['SAR'],
+  AE: ['AED'],
+  MA: ['MAD'],
+  US: ['USD'],
+  GB: ['GBP'],
+  FR: ['EUR'],
+  DE: ['EUR'],
+  TR: ['TRY'],
+  IN: ['INR'],
+  ID: ['IDR'],
+  BR: ['BRL'],
+};
+
 type CookieRow = { _id: string; c_user: string | null; createdAt?: string };
 
 type ServerItem = { _id: string; name: string; isActive?: boolean };
@@ -59,6 +105,11 @@ export default function LinkingPage() {
   const [acceptLanguage, setAcceptLanguage] = useState('');
   const [currency, setCurrency] = useState<string>('');
 
+  // Derived options for dropdowns
+  const languageOptions = useMemo(() => FB_LANGS[country] || ['en-US,en;q=0.9'], [country]);
+  const timezoneOptions = useMemo(() => FB_TZS[country] || ['UTC'], [country]);
+  const currencyOptions = useMemo(() => FB_CURRENCIES[country] || ['USD', 'EUR'], [country]);
+
   const [batchId, setBatchId] = useState<string | null>(null);
   const [preview, setPreview] = useState<GenerateTempResponse['preview']>([]);
 
@@ -87,11 +138,13 @@ export default function LinkingPage() {
   // Auto-fill fingerprint when country changes
   useEffect(() => {
     if (!useAutoFingerprint) return;
-    const preset = COUNTRY_PRESETS[country] || COUNTRY_PRESETS['US'];
-    setTimezone(preset.tz);
-    setAcceptLanguage(preset.lang);
-    setCurrency(preset.currency || '');
-  }, [country, useAutoFingerprint]);
+    const tz = (timezoneOptions[0]) || (COUNTRY_PRESETS[country]?.tz) || 'UTC';
+    const lang = (languageOptions[0]) || (COUNTRY_PRESETS[country]?.lang) || 'en-US,en;q=0.9';
+    const cur = (currencyOptions[0]) || (COUNTRY_PRESETS[country]?.currency) || '';
+    setTimezone(tz);
+    setAcceptLanguage(lang);
+    setCurrency(cur);
+  }, [country, useAutoFingerprint, languageOptions, timezoneOptions, currencyOptions]);
 
   const saveTemplates = (list: Template[]) => {
     setTemplates(list);
@@ -385,15 +438,28 @@ export default function LinkingPage() {
             <div className="grid grid-cols-2 gap-3">
               <div>
                 <label className="block text-sm text-slate-700">Accept-Language</label>
-                <input className="w-full border rounded px-3 py-2" value={acceptLanguage} onChange={(e) => setAcceptLanguage(e.target.value)} disabled={useAutoFingerprint} />
+                <select className="w-full border rounded px-3 py-2" value={acceptLanguage} onChange={(e) => setAcceptLanguage(e.target.value)} disabled={useAutoFingerprint}>
+                  {languageOptions.map(opt => (
+                    <option key={opt} value={opt}>{opt}</option>
+                  ))}
+                </select>
               </div>
               <div>
                 <label className="block text-sm text-slate-700">Timezone (IANA)</label>
-                <input className="w-full border rounded px-3 py-2" value={timezone} onChange={(e) => setTimezone(e.target.value)} disabled={useAutoFingerprint} />
+                <select className="w-full border rounded px-3 py-2" value={timezone} onChange={(e) => setTimezone(e.target.value)} disabled={useAutoFingerprint}>
+                  {timezoneOptions.map(opt => (
+                    <option key={opt} value={opt}>{opt}</option>
+                  ))}
+                </select>
               </div>
               <div>
                 <label className="block text-sm text-slate-700">Currency (اختياري)</label>
-                <input className="w-full border rounded px-3 py-2" value={currency} onChange={(e) => setCurrency(e.target.value)} disabled={useAutoFingerprint} />
+                <select className="w-full border rounded px-3 py-2" value={currency} onChange={(e) => setCurrency(e.target.value)} disabled={useAutoFingerprint}>
+                  <option value="">(None)</option>
+                  {currencyOptions.map(opt => (
+                    <option key={opt} value={opt}>{opt}</option>
+                  ))}
+                </select>
               </div>
             </div>
             <div className="rounded border border-slate-200 p-3 bg-slate-50 text-xs text-slate-700">
@@ -432,6 +498,22 @@ export default function LinkingPage() {
               <div className="text-sm text-green-700">تم التوليد. Batch: {batchId} (عدد {preview.length})</div>
             )}
           </div>
+        </div>
+      </div>
+
+      {/* Control section: Start linking */}
+      <div className="p-4 rounded-lg border border-slate-200 bg-white mb-6">
+        <h2 className="font-semibold mb-3 text-slate-800">التحكم</h2>
+        <div className="flex flex-wrap items-center gap-3">
+          <button
+            disabled={!batchId || selectedCookieIds.length === 0 || busy}
+            onClick={startLinking}
+            className="px-4 py-2 rounded bg-green-600 text-white disabled:opacity-50 hover:bg-green-700"
+          >
+            بدء الربط
+          </button>
+          {!batchId && <span className="text-sm text-slate-600">قم بتوليد البطاقات أولًا</span>}
+          {selectedCookieIds.length === 0 && <span className="text-sm text-slate-600">حدد الكوكيز</span>}
         </div>
       </div>
 

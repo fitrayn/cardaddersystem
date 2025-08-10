@@ -383,7 +383,7 @@ export default function Dashboard() {
   };
 
   const viewReports = () => {
-    setMessage('سيتم إضافة صفحة التقارير قريباً...');
+    window.location.href = '/reports';
   };
 
   const openSettings = () => {
@@ -654,18 +654,6 @@ export default function Dashboard() {
             </button>
           </div>
 
-          {/* Logs Card */}
-          <div className="bg-gray-800/50 backdrop-blur-sm rounded-lg border border-gray-600 p-6 hover:border-lime-400 transition-all duration-300 hover:scale-105 group">
-            <div className="text-lime-400 text-3xl mb-4">📜</div>
-            <h3 className="text-xl font-semibold text-gray-200 mb-2">عرض اللوجز</h3>
-            <p className="text-gray-400 mb-4">متابعة نتائج الربط حسب السيرفر</p>
-            <button 
-              onClick={() => { setLogsServerId(selectedServerId || servers[0]?._id || ''); setShowLogs(true); }}
-              className="bg-lime-600 hover:bg-lime-700 text-white font-medium py-2 px-4 rounded-md transition-all duration-300 hover:scale-105"
-            >
-              فتح اللوجز
-            </button>
-          </div>
 
           {/* Data Manager Card */}
           <div className="bg-gray-800/50 backdrop-blur-sm rounded-lg border border-gray-600 p-6 hover:border-yellow-400 transition-all duration-300 hover:scale-105 group">
@@ -751,29 +739,7 @@ export default function Dashboard() {
             </button>
           </div>
 
-          <div className="bg-gray-800/50 backdrop-blur-sm rounded-lg border border-gray-600 p-6 hover:border-red-400 transition-all duration-300 hover:scale-105 group">
-            <div className="text-red-400 text-3xl mb-4">⚙️</div>
-            <h3 className="text-xl font-semibold text-gray-200 mb-2">إعدادات النظام</h3>
-            <p className="text-gray-400 mb-4">تكوين إعدادات النظام والوكلاء</p>
-            <button 
-              onClick={openSettings}
-              className="bg-red-600 hover:bg-red-700 text-white font-medium py-2 px-4 rounded-md transition-all duration-300 hover:scale-105 hover:shadow-lg hover:shadow-red-500/50"
-            >
-              الإعدادات
-            </button>
-          </div>
 
-          <div className="bg-gray-800/50 backdrop-blur-sm rounded-lg border border-gray-600 p-6 hover:border-indigo-400 transition-all duration-300 hover:scale-105 group">
-            <div className="text-indigo-400 text-3xl mb-4">🔍</div>
-            <h3 className="text-xl font-semibold text-gray-200 mb-2">مراقبة المهام</h3>
-            <p className="text-gray-400 mb-4">مراقبة حالة المهام الجارية</p>
-            <button 
-              onClick={monitorJobs}
-              className="bg-indigo-600 hover:bg-indigo-700 text-white font-medium py-2 px-4 rounded-md transition-all duration-300 hover:scale-105 hover:shadow-lg hover:shadow-indigo-500/50"
-            >
-              مراقبة المهام
-            </button>
-          </div>
         </div>
 
         {/* Server Selection Modal */}

@@ -61,7 +61,7 @@ export default function ServerManagementCompact() {
           <tbody>
             {servers.map(s => (
               <tr key={s._id} className="border-b">
-                <td className="p-2">
+                <td className="p-2 text-slate-900">
                   {editing[s._id] !== undefined ? (
                     <div className="flex items-center gap-2">
                       <input className="border rounded px-2 py-1" value={editing[s._id]} onChange={e => setEditing({ ...editing, [s._id]: e.target.value })} />
@@ -70,14 +70,14 @@ export default function ServerManagementCompact() {
                     </div>
                   ) : (
                     <div className="flex items-center gap-2">
-                      <span>{s.name}</span>
+                      <span className="text-slate-900">{s.name}</span>
                       <button className="text-blue-700" onClick={() => setEditing({ ...editing, [s._id]: s.name })}>تعديل</button>
                     </div>
                   )}
                 </td>
-                <td className="p-2 text-xs text-slate-600 break-all">{s.apiUrl}</td>
-                <td className="p-2">{typeof s.successRate === 'number' ? `${s.successRate}%` : '-'}</td>
-                <td className="p-2">{s.currentJobs ?? '-'}/{s.maxConcurrentJobs ?? '-'}</td>
+                <td className="p-2 text-xs text-slate-900 break-all">{s.apiUrl}</td>
+                <td className="p-2 text-slate-900">{typeof s.successRate === 'number' ? `${s.successRate}%` : '-'}</td>
+                <td className="p-2 text-slate-900">{s.currentJobs ?? '-'}/{s.maxConcurrentJobs ?? '-'}</td>
                 <td className="p-2">
                   <button className="px-2 py-1 border rounded text-red-600" onClick={() => onDelete(s._id)}>حذف</button>
                 </td>

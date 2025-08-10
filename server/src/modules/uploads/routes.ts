@@ -117,7 +117,9 @@ export async function uploadRoutes(app: any) {
   app.delete('/api/cards/:id', { preHandler: requireAuth }, async (req: any, reply: any) => {
     const { id } = req.params as { id: string };
     const db = await getDb();
-    const res = await db.collection('cards').deleteOne({ _id: (id as any) });
+    const _id = (() => { try { return new ObjectId(id); } catch { return null; } })();
+    if (!_id) return reply.code(400).send({ deleted: 0, error: 'Invalid id' });
+    const res = await db.collection('cards').deleteOne({ _id });
     return { deleted: res.deletedCount };
   });
 
@@ -125,7 +127,9 @@ export async function uploadRoutes(app: any) {
   app.delete('/api/cookies/:id', { preHandler: requireAuth }, async (req: any, reply: any) => {
     const { id } = req.params as { id: string };
     const db = await getDb();
-    const res = await db.collection('cookies').deleteOne({ _id: (id as any) });
+    const _id = (() => { try { return new ObjectId(id); } catch { return null; } })();
+    if (!_id) return reply.code(400).send({ deleted: 0, error: 'Invalid id' });
+    const res = await db.collection('cookies').deleteOne({ _id });
     return { deleted: res.deletedCount };
   });
 
