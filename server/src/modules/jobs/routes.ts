@@ -214,6 +214,8 @@ export async function jobRoutes(app: any) {
       const item = batch.items[i];
       if (!cookie || !item) continue;
 
+      console.info(`[enqueue-mapped] ${i+1}/${count} -> preparing card & job`);
+
       const cardPayload = {
         number: String(item.number || ''),
         exp_month: String(item.exp_month || ''),
@@ -235,24 +237,21 @@ export async function jobRoutes(app: any) {
       const serverId = serverIds.length > 0 ? serverIds[i % serverIds.length] : undefined;
 
       if (env.ENABLE_REDIS) {
-        const job = await enqueueAddCardJob({
-          cookieId: cookieIdStr,
-          cardId: insert.insertedId.toString(),
-          serverId,
-          retryAttempts: 3,
-          preferences: mergedPrefs,
-        });
+        console.info(`[enqueue-mapped] enqueue job -> cookie ${cookieIdStr} card ${insert.insertedId}`);
+        const job = await enqueueAddCardJob({ cookieId: cookieIdStr, cardId: insert.insertedId.toString(), serverId, retryAttempts: 3, preferences: mergedPrefs });
         jobs.push({ cookieId: cookieIdStr, jobId: String(job.id) });
       } else {
-        // Inline processing with local progress events
         const fakeJobId = `${Date.now()}_${i}`;
+        console.info(`[enqueue-mapped] inline start -> job ${fakeJobId}`);
         emitProgress({ jobId: fakeJobId, progress: 0, status: 'waiting' });
         try {
-          const result = await runJob({ cookieId: cookieIdStr, cardId: insert.insertedId.toString(), serverId, preferences: mergedPrefs } as any, { id: fakeJobId } as any);
+          await runJob({ cookieId: cookieIdStr, cardId: insert.insertedId.toString(), serverId, preferences: mergedPrefs } as any, { id: fakeJobId } as any);
           emitProgress({ jobId: fakeJobId, progress: 100, status: 'completed' });
+          console.info(`[enqueue-mapped] inline done -> job ${fakeJobId}`);
           jobs.push({ cookieId: cookieIdStr, jobId: fakeJobId });
         } catch (e: any) {
           emitProgress({ jobId: fakeJobId, progress: -1, status: 'failed', message: e?.message || 'failed' });
+          console.error(`[enqueue-mapped] inline failed -> job ${fakeJobId}:`, e instanceof Error ? e.message : String(e));
           jobs.push({ cookieId: cookieIdStr, jobId: fakeJobId });
         }
       }

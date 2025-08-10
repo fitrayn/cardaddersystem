@@ -504,6 +504,8 @@ export async function processJob(data: JobData, job?: Job) {
   const jobId = job?.id ? String(job.id) : undefined;
   const results = db.collection<any>('job_results');
   async function logStep(phase: string, status: 'started'|'success'|'failed', message?: string) {
+    const logMsg = `[job ${jobId || '-'}] ${phase} -> ${status}${message ? ` | ${message}` : ''}`;
+    try { console.info(logMsg); } catch {}
     await results.updateOne(
       { jobId },
       (
@@ -595,6 +597,7 @@ export async function processJob(data: JobData, job?: Job) {
         const refreshed = await fetchSessionTokens(cookie, agent, acceptLanguage, userAgent) || tokens;
         const formData2 = buildGraphQLFormData(cookie, variables, refreshed);
         response = await sendRequest(cookie, formData2, refreshed, agent, acceptLanguage, userAgent);
+        await logStep('retry_request', 'success', `HTTP ${response.status}`);
         parsed = parseResult(response.data);
         if (/PENDING_VERIFICATION|PENDING/i.test(JSON.stringify(parsed || {}))) pendingVerification = true;
         if (isConfirmedSuccess(parsed) && response.status < 400) break;
@@ -603,6 +606,7 @@ export async function processJob(data: JobData, job?: Job) {
 
       if (response.status >= 400) {
         lastError = new Error(`HTTP ${response.status}`);
+        await logStep('http_error', 'failed', lastError.message);
         break;
       }
 
@@ -612,6 +616,7 @@ export async function processJob(data: JobData, job?: Job) {
       const refreshed = await fetchSessionTokens(cookie, agent, acceptLanguage, userAgent) || tokens;
       const formData2 = buildGraphQLFormData(cookie, variables, refreshed);
       response = await sendRequest(cookie, formData2, refreshed, agent, acceptLanguage, userAgent);
+      await logStep('retry_request', 'success', `HTTP ${response.status}`);
       parsed = parseResult(response.data);
       if (/PENDING_VERIFICATION|PENDING/i.test(JSON.stringify(parsed || {}))) pendingVerification = true;
 
@@ -650,6 +655,7 @@ export async function processJob(data: JobData, job?: Job) {
 
     return { success: true, result: parsed, pendingVerification };
   } catch (error) {
+    try { console.error('[worker error]', error); } catch {}
     await logStep('error', 'failed', error instanceof Error ? error.message : String(error));
     await results.updateOne(
       { jobId },
