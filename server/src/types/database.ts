@@ -149,10 +149,77 @@ export interface StatsSummary {
   }>;
 }
 
+// Server Types
+export interface Server {
+  _id?: ObjectId;
+  userId: ObjectId;
+  name: string;
+  apiUrl: string;
+  description?: string;
+  isActive: boolean;
+  maxConcurrentJobs: number;
+  currentJobs: number;
+  lastHealthCheck?: Date;
+  status: 'online' | 'offline' | 'maintenance';
+  settings: {
+    timeout: number; // milliseconds
+    retryAttempts: number;
+    proxyEnabled: boolean;
+    proxyConfig?: {
+      host: string;
+      port: number;
+      username?: string;
+      password?: string;
+    };
+  };
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+export interface CreateServerInput {
+  userId: string;
+  name: string;
+  apiUrl: string;
+  description?: string;
+  maxConcurrentJobs?: number;
+  settings?: {
+    timeout?: number;
+    retryAttempts?: number;
+    proxyEnabled?: boolean;
+    proxyConfig?: {
+      host: string;
+      port: number;
+      username?: string;
+      password?: string;
+    };
+  };
+}
+
+export interface UpdateServerInput {
+  name?: string;
+  apiUrl?: string;
+  description?: string;
+  isActive?: boolean;
+  maxConcurrentJobs?: number;
+  status?: 'online' | 'offline' | 'maintenance';
+  settings?: {
+    timeout?: number;
+    retryAttempts?: number;
+    proxyEnabled?: boolean;
+    proxyConfig?: {
+      host: string;
+      port: number;
+      username?: string;
+      password?: string;
+    };
+  };
+}
+
 // Collection Names
 export const COLLECTIONS = {
   USERS: 'users',
   CARDS: 'cards',
   JOBS: 'jobs',
   STATS: 'stats',
+  SERVERS: 'servers',
 } as const; 

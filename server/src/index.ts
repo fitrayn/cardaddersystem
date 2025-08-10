@@ -10,13 +10,41 @@ import { authRoutes } from './modules/auth/routes';
 import { uploadRoutes } from './modules/uploads/routes';
 import { jobRoutes } from './modules/jobs/routes';
 import { statsRoutes } from './modules/stats/routes';
+import { serverRoutes } from './modules/servers/routes';
 
 const app = (createFastify as any)({ logger: true });
 
 app.register(helmet);
 app.register(cors, {
-  origin: env.CORS_ORIGIN,
+  origin: (origin: string | undefined, cb: (err: Error | null, allow?: boolean) => void) => {
+    // Allow requests with no origin (like mobile apps or curl requests)
+    if (!origin) return cb(null, true);
+    
+    const allowedOrigins = [
+      'http://localhost:3000',
+      'http://localhost:3001',
+      'https://elaborate-youtiao-1fc402.netlify.app',
+      'https://cardaddersystem.netlify.app',
+      'https://cardaddersystem.vercel.app'
+    ];
+    
+    if (allowedOrigins.includes(origin)) {
+      return cb(null, true);
+    }
+    
+    // In development, allow all origins
+    if (env.NODE_ENV === 'development') {
+      return cb(null, true);
+    }
+    
+    return cb(new Error('Not allowed by CORS'), false);
+  },
   credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Origin', 'Accept'],
+  exposedHeaders: ['Content-Range', 'X-Content-Range'],
+  preflightContinue: false,
+  optionsSuccessStatus: 204,
 });
 app.register(cookie);
 app.register(rateLimit, {
@@ -31,6 +59,15 @@ app.get('/health', async () => ({
   version: '1.0.0',
   environment: env.NODE_ENV
 }));
+
+// Handle preflight requests
+app.options('*', async (request: any, reply: any) => {
+  reply.header('Access-Control-Allow-Origin', request.headers.origin || '*');
+  reply.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, PATCH, OPTIONS');
+  reply.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With, Origin, Accept');
+  reply.header('Access-Control-Allow-Credentials', 'true');
+  reply.send();
+});
 
 // Initialize database connection
 app.addHook('onReady', async () => {
@@ -47,6 +84,7 @@ app.register(authRoutes);
 app.register(uploadRoutes);
 app.register(jobRoutes);
 app.register(statsRoutes);
+app.register(serverRoutes);
 
 app
   .listen({ port: env.PORT, host: '0.0.0.0' })

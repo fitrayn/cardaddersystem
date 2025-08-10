@@ -17,6 +17,18 @@ interface StatsSummary {
   successRate: number;
 }
 
+interface Server {
+  _id: string;
+  name: string;
+  apiUrl: string;
+  description?: string;
+  isActive: boolean;
+  maxConcurrentJobs: number;
+  currentJobs: number;
+  status: 'online' | 'offline' | 'maintenance';
+  lastHealthCheck?: string;
+}
+
 export default function Dashboard() {
   const { user, logout } = useAuth();
   const [serverStatus, setServerStatus] = useState<ServerStatus | null>(null);
@@ -30,6 +42,9 @@ export default function Dashboard() {
   const [showCookiesInput, setShowCookiesInput] = useState(false);
   const [cardsText, setCardsText] = useState('');
   const [cookiesText, setCookiesText] = useState('');
+  const [servers, setServers] = useState<Server[]>([]);
+  const [selectedServerId, setSelectedServerId] = useState<string>('');
+  const [showServerSelection, setShowServerSelection] = useState(false);
 
   const cardsFileRef = useRef<HTMLInputElement>(null);
   const cookiesFileRef = useRef<HTMLInputElement>(null);
@@ -38,6 +53,7 @@ export default function Dashboard() {
     checkServerConnection();
     if (user) {
       fetchStats();
+      fetchServers();
     }
   }, [user]);
 
@@ -63,6 +79,15 @@ export default function Dashboard() {
       setStats(statsData);
     } catch (err) {
       console.error('Failed to fetch stats:', err);
+    }
+  };
+
+  const fetchServers = async () => {
+    try {
+      const response = await apiClient.get<{ data: Server[] }>('/api/servers/available');
+      setServers(response.data || []);
+    } catch (err) {
+      console.error('Failed to fetch servers:', err);
     }
   };
 
@@ -200,14 +225,27 @@ export default function Dashboard() {
   };
 
   const startJobs = async () => {
+    if (servers.length === 0) {
+      setError('لا توجد سيرفرات متاحة. يرجى إضافة سيرفر أولاً.');
+      return;
+    }
+
+    if (!selectedServerId) {
+      setShowServerSelection(true);
+      return;
+    }
+
     try {
       setUploading(true);
       setMessage(null);
       setError(null);
 
-      const response = await apiClient.post('/api/jobs/enqueue-simple', {});
+      const response = await apiClient.post('/api/jobs/enqueue-simple', {
+        serverId: selectedServerId
+      });
       const result = response as { enqueued: number };
       setMessage(`تم بدء المهام بنجاح! تم إضافة ${result.enqueued} مهمة.`);
+      setSelectedServerId('');
       fetchStats(); // Refresh stats
     } catch (err) {
       setError(err instanceof Error ? err.message : 'فشل بدء المهام');
@@ -488,7 +526,7 @@ export default function Dashboard() {
               disabled={uploading}
               className="bg-purple-600 hover:bg-purple-700 disabled:bg-gray-600 text-white font-medium py-2 px-4 rounded-md transition-all duration-300 hover:scale-105 disabled:hover:scale-100 hover:shadow-lg hover:shadow-purple-500/50"
             >
-              {uploading ? 'جاري البدء...' : 'بدء المهام'}
+              {uploading ? 'جاري البدء...' : servers.length > 0 ? 'بدء المهام' : 'إضافة سيرفر أولاً'}
             </button>
           </div>
 
@@ -528,6 +566,81 @@ export default function Dashboard() {
             </button>
           </div>
         </div>
+
+        {/* Server Selection Modal */}
+        {showServerSelection && (
+          <div className="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+            <div className="bg-gray-800/90 backdrop-blur-sm rounded-lg p-6 w-full max-w-md border border-gray-600">
+              <h3 className="text-xl font-semibold text-gray-200 mb-4">اختر السيرفر</h3>
+              
+              {servers.length === 0 ? (
+                <div className="text-center py-8">
+                  <div className="text-gray-400 text-lg mb-4">لا توجد سيرفرات متاحة</div>
+                  <p className="text-gray-500 mb-4">يجب إضافة سيرفر واحد على الأقل لبدء المهام</p>
+                  <button
+                    onClick={() => {
+                      setShowServerSelection(false);
+                      // يمكن إضافة رابط لإدارة السيرفرات هنا
+                    }}
+                    className="bg-blue-600 hover:bg-blue-700 text-white font-medium py-2 px-4 rounded-md transition-all duration-300 hover:scale-105"
+                  >
+                    إدارة السيرفرات
+                  </button>
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  {servers.map((server) => (
+                    <div
+                      key={server._id}
+                      className={`p-4 border rounded-md cursor-pointer transition-all duration-300 ${
+                        selectedServerId === server._id
+                          ? 'border-blue-400 bg-blue-900/20'
+                          : 'border-gray-600 hover:border-gray-500 bg-gray-700/50'
+                      }`}
+                      onClick={() => setSelectedServerId(server._id)}
+                    >
+                      <div className="flex justify-between items-center">
+                        <div>
+                          <div className="font-semibold text-gray-200">{server.name}</div>
+                          <div className="text-sm text-gray-400">{server.apiUrl}</div>
+                          <div className="text-xs text-gray-500">
+                            المهام: {server.currentJobs}/{server.maxConcurrentJobs}
+                          </div>
+                        </div>
+                        <div className={`px-2 py-1 rounded-full text-xs font-medium ${
+                          server.status === 'online' ? 'text-green-400' : 'text-red-400'
+                        }`}>
+                          {server.status === 'online' ? 'متصل' : 'غير متصل'}
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              <div className="flex gap-2 mt-6">
+                <button
+                  onClick={() => {
+                    if (selectedServerId) {
+                      setShowServerSelection(false);
+                      startJobs();
+                    }
+                  }}
+                  disabled={!selectedServerId}
+                  className="bg-blue-600 hover:bg-blue-700 disabled:bg-gray-600 text-white font-medium py-2 px-4 rounded-md transition-all duration-300 hover:scale-105 disabled:hover:scale-100"
+                >
+                  بدء المهام
+                </button>
+                <button
+                  onClick={() => setShowServerSelection(false)}
+                  className="bg-gray-600 hover:bg-gray-700 text-white font-medium py-2 px-4 rounded-md transition-all duration-300 hover:scale-105"
+                >
+                  إلغاء
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* Footer */}
         <div className="text-center mt-12 text-gray-500">

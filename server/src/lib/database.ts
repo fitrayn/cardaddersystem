@@ -53,6 +53,13 @@ export async function setupCollections(): Promise<void> {
   await statsCollection.createIndex({ userId: 1 });
   await statsCollection.createIndex({ date: 1 });
 
+  // Servers collection
+  const serversCollection = db.collection('servers');
+  await serversCollection.createIndex({ userId: 1 });
+  await serversCollection.createIndex({ name: 1 });
+  await serversCollection.createIndex({ isActive: 1 });
+  await serversCollection.createIndex({ createdAt: -1 });
+
   console.log('✅ Database collections and indexes created');
 }
 
