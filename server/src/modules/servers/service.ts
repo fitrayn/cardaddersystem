@@ -150,13 +150,12 @@ export class ServerService {
   // فحص صحة السيرفر
   static async healthCheck(serverId: string): Promise<boolean> {
     try {
-      const server = await this.getServerById(serverId, '');
+      const collection = this.collection();
+      const server = await collection.findOne({ _id: new ObjectId(serverId) });
       if (!server) return false;
 
-      // هنا يمكن إضافة منطق فحص صحة السيرفر
-      // مثل إرسال طلب HTTP إلى endpoint الصحة
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), server.settings.timeout);
+      const timeoutId = setTimeout(() => controller.abort(), server.settings?.timeout || 30000);
       
       const response = await fetch(`${server.apiUrl}/health`, {
         method: 'GET',
