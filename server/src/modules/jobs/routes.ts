@@ -54,6 +54,7 @@ export async function jobRoutes(app: any) {
       'Cache-Control': 'no-cache, no-transform',
       Connection: 'keep-alive',
       'Access-Control-Allow-Origin': '*',
+      'X-Accel-Buffering': 'no',
     });
     reply.raw.write('\n');
 
@@ -63,6 +64,11 @@ export async function jobRoutes(app: any) {
         reply.raw.write(`data: ${JSON.stringify(payload)}\n\n`);
       } catch {}
     };
+
+    // Heartbeat to keep connection alive behind proxies
+    const heartbeat = setInterval(() => {
+      try { reply.raw.write(`:\n\n`); } catch {}
+    }, 25000);
 
     let removeQueueListener: (() => void) | null = null;
 
@@ -79,6 +85,7 @@ export async function jobRoutes(app: any) {
 
     req.raw.on('close', () => {
       if (removeQueueListener) removeQueueListener();
+      clearInterval(heartbeat);
     });
   });
 
