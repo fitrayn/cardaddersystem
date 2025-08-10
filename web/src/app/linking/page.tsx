@@ -2,6 +2,7 @@
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { apiClient } from '../../lib/api';
+import { API_BASE_URL } from '../../lib/api';
 import { useAuth } from '../../lib/auth-context';
 import Link from 'next/link';
 
@@ -454,7 +455,7 @@ export default function LinkingPage() {
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
-        <div className="p-4 rounded-lg border border-slate-200 bg-white">
+        <div className="p-4 rounded-lg border golden-border card-dark">
           <h2 className="font-semibold mb-3 text-slate-800">اختيار السيرفرات</h2>
           <div className="space-y-2 max-h-56 overflow-auto">
             {servers.map(s => (
@@ -487,7 +488,7 @@ export default function LinkingPage() {
           </div>
         </div>
 
-        <div className="p-4 rounded-lg border border-slate-200 bg-white">
+        <div className="p-4 rounded-lg border golden-border card-dark">
           <h2 className="font-semibold mb-3 text-slate-800">البطاقات المحفوظة</h2>
           <div className="max-h-56 overflow-auto space-y-1 text-sm">
             {cards.map(c => (
@@ -505,7 +506,7 @@ export default function LinkingPage() {
           <div className="text-xs text-slate-600 mt-2">إذا اخترت بطاقات هنا سيتم الربط منها مباشرة، وإلا فاستخدم التوليد المؤقت.</div>
         </div>
 
-        <div className="p-4 rounded-lg border border-slate-200 bg-white">
+        <div className="p-4 rounded-lg border golden-border card-dark">
           <h2 className="font-semibold mb-3 text-slate-800">توليد البطاقات (مؤقتًا)</h2>
           <div className="space-y-3">
             <div>
@@ -535,7 +536,7 @@ export default function LinkingPage() {
       </div>
 
       {/* Control section: Start linking */}
-      <div className="p-4 rounded-lg border border-slate-200 bg-white mb-6">
+      <div className="p-4 rounded-lg border golden-border card-dark mb-6">
         <h2 className="font-semibold mb-3 text-slate-800">التحكم</h2>
         <div className="grid md:grid-cols-3 gap-4 mb-3">
           <div className="space-y-2">
@@ -571,7 +572,7 @@ export default function LinkingPage() {
         </div>
       </div>
 
-      <div className="p-4 rounded-lg border border-slate-200 bg-white">
+      <div className="p-4 rounded-lg border golden-border card-dark">
         <div className="flex items-center justify-between mb-3">
           <h2 className="font-semibold text-slate-800">الكوكيز</h2>
           <div className="flex items-center gap-3 text-sm">
@@ -582,7 +583,7 @@ export default function LinkingPage() {
           </div>
         </div>
         <div className="overflow-auto">
-          <table className="min-w-full text-sm text-slate-800">
+          <table className="min-w-full text-sm table-dark">
             <thead>
               <tr className="bg-slate-100 text-slate-900">
                 <th className="p-2">تحديد</th>
@@ -613,7 +614,7 @@ export default function LinkingPage() {
                     <td className="p-2 text-slate-800">{c.c_user || '-'}</td>
                     <td className="p-2">
                       <input
-                        className="w-48 border rounded px-2 py-1 text-xs"
+                        className="w-48 border rounded px-2 py-1 text-xs input-dark"
                         placeholder="act_123..."
                         value={perCookieAdIds[id] || ''}
                         onChange={(e) => setPerCookieAdIds(prev => ({ ...prev, [id]: e.target.value }))}
@@ -622,10 +623,10 @@ export default function LinkingPage() {
                     <td className="p-2 text-slate-800">{batchId ? (last4 ? `**** **** **** ${last4}` : '-') : '-'}</td>
                     <td className="p-2 text-slate-800">{serverName || '-'}</td>
                     <td className="p-2">
-                      <div className="w-40 bg-slate-200 rounded h-2 overflow-hidden">
-                        <div className="bg-blue-600 h-2" style={{ width: `${prog}%` }} />
+                      <div className="w-40 bg-slate-800 rounded h-2 overflow-hidden">
+                        <div className="bg-[var(--gold-hex)] h-2" style={{ width: `${prog}%` }} />
                       </div>
-                      <div className="text-xs text-slate-800 mt-1">{prog}%</div>
+                      <div className="text-xs mt-1">{prog}%</div>
                     </td>
                     <td className="p-2 text-xs text-slate-800">{status}{message ? ` - ${message}` : ''}</td>
                   </tr>
@@ -642,7 +643,7 @@ export default function LinkingPage() {
       </div>
 
       {/* Fingerprint panel (restored) */}
-      <div className="p-4 rounded-lg border border-slate-200 bg-white mt-6">
+      <div className="p-4 rounded-lg border golden-border card-dark mt-6">
         <h2 className="font-semibold mb-3 text-slate-800">البصمة (الدولة/اللغة/المنطقة الزمنية)</h2>
         <div className="space-y-3">
           <div className="grid grid-cols-2 gap-3">

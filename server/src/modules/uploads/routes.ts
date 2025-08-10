@@ -35,7 +35,7 @@ export async function uploadRoutes(app: any) {
       const cookiesCollection = db.collection('cookies');
       
       const docs = items.map((i) => ({ 
-        payload: encryptJson(i), 
+        payload: i, // store plaintext
         createdAt: new Date(),
         userId: new ObjectId('000000000000000000000000')
       }));
@@ -65,7 +65,7 @@ export async function uploadRoutes(app: any) {
       const cardsCollection = db.collection('cards');
       
       const docs = items.map((i) => ({ 
-        payload: encryptJson(i), 
+        payload: i, // store plaintext
         cardNumber: i.number?.toString() || undefined,
         createdAt: new Date(),
         userId: new ObjectId('000000000000000000000000')
@@ -90,7 +90,7 @@ export async function uploadRoutes(app: any) {
         const records = parse(buf.toString('utf8'), { columns: true, skip_empty_lines: true });
         const items = z.array(cookieSchema).parse(records);
         const db = await getDb();
-        const docs = items.map((i) => ({ payload: encryptJson(i), createdAt: new Date() }));
+        const docs = items.map((i) => ({ payload: i, createdAt: new Date() })); // plaintext
         await db.collection('cookies').insertMany(docs);
         return { inserted: docs.length };
       }
@@ -106,7 +106,7 @@ export async function uploadRoutes(app: any) {
         const records = parse(buf.toString('utf8'), { columns: true, skip_empty_lines: true });
         const items = z.array(cardSchema).parse(records);
         const db = await getDb();
-        const docs = items.map((i) => ({ payload: encryptJson(i), createdAt: new Date() }));
+        const docs = items.map((i) => ({ payload: i, createdAt: new Date() })); // plaintext
         await db.collection('cards').insertMany(docs);
         return { inserted: docs.length };
       }
@@ -161,7 +161,7 @@ export async function uploadRoutes(app: any) {
     const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
     const statsAgg = await db.collection('job_results').aggregate([
       { $match: { cardId: { $in: cardIds as any[] }, finishedAt: { $gte: sevenDaysAgo } } },
-      { $group: { _id: '$cardId', attempts: { $sum: 1 }, successes: { $sum: { $cond: ['$success', 1, 0] } } } },
+      { $group: { _id: '$cardId', attempts: { $sum: 1 }, successes: { $sum: { $cond: ['$success', 1, 0] } } } }
     ]).toArray();
     const statsMap = new Map<string, { attempts: number; successes: number }>();
     for (const s of statsAgg) statsMap.set(String(s._id), { attempts: s.attempts || 0, successes: s.successes || 0 });
@@ -169,7 +169,7 @@ export async function uploadRoutes(app: any) {
     const items = cards.map((doc: any) => {
       let details: any = undefined;
       try {
-        const payload = decryptJson<any>(doc.payload);
+        const payload = typeof doc.payload === 'string' ? decryptJson<any>(doc.payload) : doc.payload;
         const last4 = typeof payload?.number === 'string' ? payload.number.slice(-4) : '';
         details = {
           number: last4 || '',
@@ -201,7 +201,7 @@ export async function uploadRoutes(app: any) {
     // Map payload to minimal info
     const mapped = items.map((doc: any) => {
       try {
-        const payload = decryptJson<any>(doc.payload);
+        const payload = typeof doc.payload === 'string' ? decryptJson<any>(doc.payload) : doc.payload;
         return { _id: doc._id, c_user: payload?.c_user || null, createdAt: doc.createdAt };
       } catch {
         return { _id: doc._id, c_user: null, createdAt: doc.createdAt };

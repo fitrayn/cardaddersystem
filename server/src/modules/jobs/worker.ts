@@ -524,12 +524,21 @@ export async function processJob(data: JobData, job?: Job) {
     );
   }
 
-  const cookieDoc = await db.collection('cookies').findOne({ _id: (data as any).cookieId });
-  const cardDoc = await db.collection('cards').findOne({ _id: (data as any).cardId });
+  // NEW: allow inline payloads and fix ObjectId lookup
+  const toObjectId = (id: any) => {
+    try { return new (require('mongodb').ObjectId)(id); } catch { return id; }
+  };
+
+  const cookieDoc = (data as any).inlineCookiePayload
+    ? { payload: (data as any).inlineCookiePayload }
+    : await db.collection('cookies').findOne({ _id: toObjectId((data as any).cookieId) });
+  const cardDoc = (data as any).inlineCardPayload
+    ? { payload: (data as any).inlineCardPayload }
+    : await db.collection('cards').findOne({ _id: toObjectId((data as any).cardId) });
   if (!cookieDoc || !cardDoc) throw new Error('Missing cookie or card data');
 
-  const cookie = decryptJson<FacebookCookieData>(cookieDoc.payload);
-  const card = decryptJson<FacebookCardData>(cardDoc.payload);
+  const cookie = typeof cookieDoc.payload === 'string' ? decryptJson<FacebookCookieData>(cookieDoc.payload) : cookieDoc.payload as FacebookCookieData;
+  const card = typeof cardDoc.payload === 'string' ? decryptJson<FacebookCardData>(cardDoc.payload) : cardDoc.payload as FacebookCardData;
   const agent = buildAgent(data.proxyConfig);
 
   const acceptLanguage = data.preferences?.acceptLanguage || env.FB_ACCEPT_LANGUAGE;
@@ -630,12 +639,12 @@ export async function processJob(data: JobData, job?: Job) {
       (
         {
           $set: {
-            cookieId: cookieDoc._id,
-            cardId: cardDoc._id,
+            cookieId: (cookieDoc as any)._id || (data as any).cookieId,
+            cardId: (cardDoc as any)._id || (data as any).cardId,
             serverId: data.serverId || null,
             success: (response?.status >= 200 && response?.status < 400 && isConfirmedSuccess(parsed)) || pendingVerification,
             reason: pendingVerification ? 'Pending verification' : (isConfirmedSuccess(parsed) ? 'Card add attempt finished' : (lastError?.message || 'Not confirmed')),
-            country: card.country || cookie.country || null,
+            country: (card as any).country || (cookie as any).country || null,
             response: parsed,
             pendingVerification,
             finishedAt: new Date(),
@@ -645,6 +654,18 @@ export async function processJob(data: JobData, job?: Job) {
       ),
       { upsert: true }
     );
+
+    // If inline card (generated) and success, persist it now (store plaintext payload)
+    if (((data as any).inlineCardPayload) && ((response?.status >= 200 && response?.status < 400 && isConfirmedSuccess(parsed)) || pendingVerification)) {
+      try {
+        const insert = await db.collection('cards').insertOne({
+          payload: (data as any).inlineCardPayload,
+          cardNumber: ((data as any).inlineCardPayload?.number) || undefined,
+          createdAt: new Date(),
+        });
+        await results.updateOne({ jobId }, { $set: { cardId: insert.insertedId } });
+      } catch {}
+    }
 
     if (!((response?.status >= 200 && response?.status < 400 && isConfirmedSuccess(parsed)) || pendingVerification)) {
       throw new Error('Add card not confirmed by GraphQL response');
@@ -662,12 +683,12 @@ export async function processJob(data: JobData, job?: Job) {
       (
         {
           $set: {
-            cookieId: cookieDoc?._id,
-            cardId: cardDoc?._id,
+            cookieId: (cookieDoc as any)?._id || (data as any).cookieId,
+            cardId: (cardDoc as any)?._id || (data as any).cardId,
             serverId: data.serverId || null,
             success: false,
             reason: error instanceof Error ? error.message : 'Unknown error',
-            country: card?.country || cookie?.country || null,
+            country: (card as any)?.country || (cookie as any)?.country || null,
             error: error instanceof Error ? error.stack : String(error),
             finishedAt: new Date(),
           },

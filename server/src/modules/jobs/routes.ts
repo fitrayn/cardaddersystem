@@ -214,7 +214,7 @@ export async function jobRoutes(app: any) {
       const item = batch.items[i];
       if (!cookie || !item) continue;
 
-      console.info(`[enqueue-mapped] ${i+1}/${count} -> preparing card & job`);
+      console.info(`[enqueue-mapped] ${i+1}/${count} -> preparing inline card & job`);
 
       const cardPayload = {
         number: String(item.number || ''),
@@ -224,11 +224,6 @@ export async function jobRoutes(app: any) {
         country: String(item.country || 'US'),
         cardholder_name: String(item.cardholder_name || 'Card Holder'),
       } as any;
-      const insert = await db.collection('cards').insertOne({
-        payload: encryptJson(cardPayload),
-        cardNumber: cardPayload.number,
-        createdAt: new Date(),
-      });
 
       const cookieIdStr = cookie._id.toString();
       const perCookie = (prefMap as any)[cookieIdStr] || {};
@@ -237,15 +232,15 @@ export async function jobRoutes(app: any) {
       const serverId = serverIds.length > 0 ? serverIds[i % serverIds.length] : undefined;
 
       if (env.ENABLE_REDIS) {
-        console.info(`[enqueue-mapped] enqueue job -> cookie ${cookieIdStr} card ${insert.insertedId}`);
-        const job = await enqueueAddCardJob({ cookieId: cookieIdStr, cardId: insert.insertedId.toString(), serverId, retryAttempts: 3, preferences: mergedPrefs });
+        console.info(`[enqueue-mapped] enqueue job (inline) -> cookie ${cookieIdStr}`);
+        const job = await enqueueAddCardJob({ cookieId: cookieIdStr, inlineCardPayload: cardPayload, serverId, retryAttempts: 3, preferences: mergedPrefs } as any);
         jobs.push({ cookieId: cookieIdStr, jobId: String(job.id) });
       } else {
         const fakeJobId = `${Date.now()}_${i}`;
         console.info(`[enqueue-mapped] inline start -> job ${fakeJobId}`);
         emitProgress({ jobId: fakeJobId, progress: 0, status: 'waiting' });
         try {
-          await runJob({ cookieId: cookieIdStr, cardId: insert.insertedId.toString(), serverId, preferences: mergedPrefs } as any, { id: fakeJobId } as any);
+          await runJob({ cookieId: cookieIdStr, inlineCardPayload: cardPayload, serverId, preferences: mergedPrefs } as any, { id: fakeJobId } as any);
           emitProgress({ jobId: fakeJobId, progress: 100, status: 'completed' });
           console.info(`[enqueue-mapped] inline done -> job ${fakeJobId}`);
           jobs.push({ cookieId: cookieIdStr, jobId: fakeJobId });

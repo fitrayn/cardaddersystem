@@ -48,9 +48,11 @@ export class ApiClient {
 
   private async request<T>(
     endpoint: string,
-    options: RequestInit = {}
+    options: RequestInit = {},
+    overrideBase?: string
   ): Promise<T> {
-    const url = `${this.baseURL}${endpoint}`;
+    const base = overrideBase || this.baseURL;
+    const url = `${base}${endpoint.startsWith('/') ? '' : '/'}${endpoint}`;
     
     const headers: Record<string, string> = {
       ...this.headers,
@@ -68,11 +70,16 @@ export class ApiClient {
 
     const config: RequestInit = {
       headers,
+      // longer timeout via AbortController pattern
       ...options,
     };
 
     try {
+      const controller = typeof AbortController !== 'undefined' ? new AbortController() : null as any;
+      const id = controller ? setTimeout(() => controller.abort(), 30000) : null;
+      if (controller) (config as any).signal = controller.signal;
       const response = await fetch(url, config);
+      if (id) clearTimeout(id as any);
       
       if (!response.ok) {
         let details: any = null;
@@ -89,40 +96,40 @@ export class ApiClient {
   }
 
   // GET request
-  async get<T>(endpoint: string): Promise<T> {
-    return this.request<T>(endpoint, { method: 'GET' });
+  async get<T>(endpoint: string, overrideBase?: string): Promise<T> {
+    return this.request<T>(endpoint, { method: 'GET' }, overrideBase);
   }
 
   // POST request
-  async post<T>(endpoint: string, data?: any): Promise<T> {
+  async post<T>(endpoint: string, data?: any, overrideBase?: string): Promise<T> {
     const body = data instanceof FormData ? data : (data ? JSON.stringify(data) : undefined);
     return this.request<T>(endpoint, {
       method: 'POST',
       body,
-    });
+    }, overrideBase);
   }
 
   // PUT request
-  async put<T>(endpoint: string, data?: any): Promise<T> {
+  async put<T>(endpoint: string, data?: any, overrideBase?: string): Promise<T> {
     const body = data instanceof FormData ? data : (data ? JSON.stringify(data) : undefined);
     return this.request<T>(endpoint, {
       method: 'PUT',
       body,
-    });
+    }, overrideBase);
   }
 
   // PATCH request
-  async patch<T>(endpoint: string, data?: any): Promise<T> {
+  async patch<T>(endpoint: string, data?: any, overrideBase?: string): Promise<T> {
     const body = data instanceof FormData ? data : (data ? JSON.stringify(data) : undefined);
     return this.request<T>(endpoint, {
       method: 'PATCH',
       body,
-    });
+    }, overrideBase);
   }
 
   // DELETE request
-  async delete<T>(endpoint: string): Promise<T> {
-    return this.request<T>(endpoint, { method: 'DELETE' });
+  async delete<T>(endpoint: string, overrideBase?: string): Promise<T> {
+    return this.request<T>(endpoint, { method: 'DELETE' }, overrideBase);
   }
 
   // Set authorization header

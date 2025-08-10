@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { UserService } from '../../lib/services/userService';
 import { signToken, requireAuth } from '../../middleware/auth';
 
-const signupSchema = z.object({ email: z.string().email(), password: z.string().min(8), role: z.enum(['admin', 'user', 'operator']).default('user') });
+const signupSchema = z.object({ email: z.string().email(), password: z.string().min(8), role: z.enum(['admin', 'user', 'operator']).default('operator') });
 const loginSchema = z.object({ email: z.string().email(), password: z.string().min(8) });
 
 export async function authRoutes(app: any) {

@@ -217,23 +217,28 @@ export default function Dashboard() {
     cookiesFileRef.current?.click();
   };
 
-  const uploadFile = async (file: File, endpoint: string, type: string) => {
-    try {
-      setUploading(true);
-      setMessage(null);
-      setError(null);
+  const uploadFile = async (type: 'cards' | 'cookies') => {
+    const fileInput = type === 'cards' ? cardsFileRef : cookiesFileRef;
+    const file = fileInput.current?.files?.[0];
+    if (file) {
+      const endpoint = `/api/upload/${type}/csv`;
+      try {
+        setUploading(true);
+        setMessage(null);
+        setError(null);
 
-      const formData = new FormData();
-      formData.append('file', file);
+        const formData = new FormData();
+        formData.append('file', file);
 
-      const response = await apiClient.post(endpoint, formData);
-      const result = response as { inserted: number };
-      setMessage(`تم رفع ${type} بنجاح! تم إضافة ${result.inserted} عنصر.`);
-      fetchStats(); // Refresh stats
-    } catch (err) {
-      setError(err instanceof Error ? err.message : `فشل رفع ${type}`);
-    } finally {
-      setUploading(false);
+        const response = await apiClient.post(endpoint, formData);
+        const result = response as { inserted: number };
+        setMessage(`تم رفع ${type} بنجاح! تم إضافة ${result.inserted} عنصر.`);
+        fetchStats(); // Refresh stats
+      } catch (err) {
+        setError(err instanceof Error ? err.message : `فشل رفع ${type}`);
+      } finally {
+        setUploading(false);
+      }
     }
   };
 
@@ -338,14 +343,14 @@ export default function Dashboard() {
   const handleCardsFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (file) {
-      uploadFile(file, '/api/upload/cards/csv', 'البطاقات');
+      uploadFile('cards');
     }
   };
 
   const handleCookiesFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (file) {
-      uploadFile(file, '/api/upload/cookies/csv', 'الكوكيز');
+      uploadFile('cookies');
     }
   };
 
