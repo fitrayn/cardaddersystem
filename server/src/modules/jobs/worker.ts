@@ -4,6 +4,9 @@ import { decryptJson } from '../../lib/encryption';
 import axios from 'axios';
 import { buildAgent } from '../proxy/agent';
 import { env } from '../../config/env';
+import type { Job } from 'bullmq';
+import http from 'node:http';
+import https from 'node:https';
 
 interface FacebookCardData {
   number: string;
@@ -143,14 +146,18 @@ async function sendRequest(cookie: FacebookCookieData, formData: string, agent?:
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), 30000); // 30s phase timeout
   try {
+    const fallbackHttp = new http.Agent({ keepAlive: true, maxSockets: 50 });
+    const fallbackHttps = new https.Agent({ keepAlive: true, maxSockets: 50 });
     const response = await axios.post(FB_GRAPHQL_URL, formData, {
       headers,
-      httpsAgent: agent,
-      httpAgent: agent,
+      httpsAgent: agent || fallbackHttps,
+      httpAgent: agent || fallbackHttp,
       signal: controller.signal as any,
       timeout: 35000,
       // http2: true as any,  // not supported in axios types; rely on agent capabilities
       maxRedirects: 0,
+      maxBodyLength: Infinity,
+      maxContentLength: Infinity,
       validateStatus: (s) => s >= 200 && s < 500,
     });
     return response;
@@ -174,8 +181,29 @@ function parseResult(data: any) {
   }
 }
 
-async function processJob(data: JobData) {
+async function processJob(data: JobData, job?: Job) {
   const db = await getDb();
+  const jobId = job?.id ? String(job.id) : undefined;
+  const results = db.collection<any>('job_results');
+  async function logStep(phase: string, status: 'started'|'success'|'failed', message?: string) {
+    await results.updateOne(
+      { jobId },
+      (
+        {
+          $setOnInsert: {
+            jobId,
+            cookieId: (data as any).cookieId,
+            cardId: (data as any).cardId,
+            serverId: data.serverId || null,
+            createdAt: new Date(),
+          },
+          $push: { steps: { phase, status, message: message || null, at: new Date() } },
+        } as any
+      ),
+      { upsert: true }
+    );
+  }
+
   const cookieDoc = await db.collection('cookies').findOne({ _id: (data as any).cookieId });
   const cardDoc = await db.collection('cards').findOne({ _id: (data as any).cardId });
   if (!cookieDoc || !cardDoc) throw new Error('Missing cookie or card data');
@@ -184,36 +212,61 @@ async function processJob(data: JobData) {
   const card = decryptJson<FacebookCardData>(cardDoc.payload);
   const agent = buildAgent(data.proxyConfig);
 
+  await logStep('prepare_session', 'started', 'Fetching fb_dtsg');
+
   try {
     const fbDtsg = await prepareSession(cookie, agent);
+    await logStep('prepare_session', 'success');
+    await logStep('build_payload', 'started');
     const formData = buildGraphQLPayload(cookie, card, fbDtsg);
+    await logStep('build_payload', 'success');
+    await logStep('send_request', 'started');
     const response = await sendRequest(cookie, formData, agent);
+    await logStep('send_request', 'success', `HTTP ${response.status}`);
     const result = parseResult(response.data);
 
-    await db.collection('job_results').insertOne({
-      cookieId: cookieDoc._id,
-      cardId: cardDoc._id,
-      serverId: data.serverId || null,
-      success: response.status >= 200 && response.status < 400,
-      reason: 'Card add attempt finished',
-      country: card.country || cookie.country || null,
-      response: result,
-      createdAt: new Date(),
-    });
+    await results.updateOne(
+      { jobId },
+      (
+        {
+          $set: {
+            cookieId: cookieDoc._id,
+            cardId: cardDoc._id,
+            serverId: data.serverId || null,
+            success: response.status >= 200 && response.status < 400,
+            reason: 'Card add attempt finished',
+            country: card.country || cookie.country || null,
+            response: result,
+            finishedAt: new Date(),
+          },
+          $push: { steps: { phase: 'done', status: 'success', message: null, at: new Date() } },
+        } as any
+      ),
+      { upsert: true }
+    );
 
     if (response.status >= 400) throw new Error(`HTTP ${response.status}`);
     return { success: true, result };
   } catch (error) {
-    await db.collection('job_results').insertOne({
-      cookieId: cookieDoc._id,
-      cardId: cardDoc._id,
-      serverId: data.serverId || null,
-      success: false,
-      reason: error instanceof Error ? error.message : 'Unknown error',
-      country: card.country || cookie.country || null,
-      error: error instanceof Error ? error.stack : String(error),
-      createdAt: new Date(),
-    });
+    await logStep('error', 'failed', error instanceof Error ? error.message : String(error));
+    await results.updateOne(
+      { jobId },
+      (
+        {
+          $set: {
+            cookieId: cookieDoc?._id,
+            cardId: cardDoc?._id,
+            serverId: data.serverId || null,
+            success: false,
+            reason: error instanceof Error ? error.message : 'Unknown error',
+            country: card?.country || cookie?.country || null,
+            error: error instanceof Error ? error.stack : String(error),
+            finishedAt: new Date(),
+          },
+        } as any
+      ),
+      { upsert: true }
+    );
     throw error;
   }
 }
