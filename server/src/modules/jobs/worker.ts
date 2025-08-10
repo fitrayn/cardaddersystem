@@ -145,19 +145,49 @@ async function fetchFbDtsg(cookie: FacebookCookieData, agent?: any, acceptLang?:
     { url: 'https://m.facebook.com/business', referer: 'https://m.facebook.com/' },
   ];
 
+  let debugInfo: string[] = [];
   for (const entry of tryPages) {
-    const resp = await httpGet(entry.url, cookie, agent, entry.referer, acceptLang);
-    const status = resp.status;
-    const location = (resp.headers as any)?.location as string | undefined;
-    if (isLoginRedirect(status, location)) {
-      // Immediate indication that session is invalid
-      throw new Error('Facebook session requires login (redirected to login/checkpoint)');
+    try {
+      const resp = await httpGet(entry.url, cookie, agent, entry.referer, acceptLang);
+      const status = resp.status;
+      const location = (resp.headers as any)?.location as string | undefined;
+      
+      debugInfo.push(`${entry.url}: HTTP ${status}${location ? ` -> ${location}` : ''}`);
+      
+      if (isLoginRedirect(status, location)) {
+        // Immediate indication that session is invalid
+        throw new Error(`Facebook session requires login (redirected to login/checkpoint from ${entry.url})`);
+      }
+      
+      const html = typeof resp.data === 'string' ? resp.data : '';
+      const token = extractFbDtsgFromHtml(html);
+      if (token) {
+        console.log(`✅ fb_dtsg found on ${entry.url}`);
+        return token;
+      }
+      
+      // Log partial HTML content for debugging (first 500 chars)
+      const htmlSnippet = html.substring(0, 500).replace(/\s+/g, ' ');
+      debugInfo.push(`  HTML snippet: ${htmlSnippet}...`);
+      
+      // Check for common error indicators
+      if (html.includes('challenge') || html.includes('checkpoint')) {
+        debugInfo.push(`  ⚠️ Challenge/checkpoint detected in HTML`);
+      }
+      if (html.includes('login') || html.includes('Log In')) {
+        debugInfo.push(`  ⚠️ Login required detected in HTML`);
+      }
+      
+    } catch (error) {
+      debugInfo.push(`${entry.url}: ERROR - ${(error as any)?.message}`);
+      if ((error as any)?.message?.includes('login') || (error as any)?.message?.includes('checkpoint')) {
+        throw error; // Re-throw login-related errors immediately
+      }
     }
-    const html = typeof resp.data === 'string' ? resp.data : '';
-    const token = extractFbDtsgFromHtml(html);
-    if (token) return token;
   }
-
+  
+  // Log all debug info when no token found
+  console.log(`❌ fb_dtsg not found. Debug info:\n${debugInfo.join('\n')}`);
   return null;
 }
 
@@ -202,20 +232,43 @@ function buildGraphQLPayload(cookie: FacebookCookieData, card: FacebookCardData,
 }
 
 async function prepareSession(cookie: FacebookCookieData, agent?: any, acceptLang?: string): Promise<string> {
+  // Basic cookie validation
+  if (!cookie.c_user || !cookie.xs) {
+    throw new Error('Invalid cookie: missing c_user or xs');
+  }
+  if (cookie.c_user.length < 10 || cookie.xs.length < 20) {
+    throw new Error('Invalid cookie: c_user or xs appears malformed');
+  }
+  
   const maxAttempts = 4;
   let lastError: any = null;
+  let debugLogs: string[] = [];
+  
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
     try {
+      console.log(`🔄 fb_dtsg attempt ${attempt + 1}/${maxAttempts} for user ${cookie.c_user}`);
       const token = await fetchFbDtsg(cookie, agent, acceptLang);
       if (token) return token;
+      debugLogs.push(`Attempt ${attempt + 1}: No token found`);
     } catch (e) {
       lastError = e;
+      debugLogs.push(`Attempt ${attempt + 1}: ${(e as any)?.message}`);
+      
+      // Don't retry if it's clearly a session issue
+      if ((e as any)?.message?.includes('login') || (e as any)?.message?.includes('checkpoint')) {
+        break;
+      }
     }
     // Small backoff between attempts
-    await new Promise(res => setTimeout(res, 500 * (attempt + 1)));
+    if (attempt < maxAttempts - 1) {
+      await new Promise(res => setTimeout(res, 500 * (attempt + 1)));
+    }
   }
+  
+  // Comprehensive error message
+  const errorDetails = debugLogs.join('; ');
   const hint = lastError?.message ? `: ${String(lastError.message)}` : '';
-  throw new Error(`Failed to get fb_dtsg token${hint}`);
+  throw new Error(`Failed to get fb_dtsg token after ${maxAttempts} attempts${hint}. Details: ${errorDetails}`);
 }
 
 async function sendRequest(cookie: FacebookCookieData, formData: string, agent?: any, preferences?: { acceptLanguage?: string }) {
