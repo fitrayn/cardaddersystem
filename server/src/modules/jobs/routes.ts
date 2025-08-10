@@ -147,6 +147,7 @@ export async function jobRoutes(app: any) {
     const pairs = Math.min(cookies.length, cards.length);
     let enqueued = 0;
     let skipped = 0;
+    const jobs: Array<{ cookieId: string; jobId: string }> = [];
     const prefMap = body.preferencesByCookieId || {};
     
     for (let i = 0; i < pairs; i++) {
@@ -162,23 +163,36 @@ export async function jobRoutes(app: any) {
 
       const inlineCookiePayload = decodeCookie(cookie);
       if (!inlineCookiePayload || !inlineCookiePayload.c_user || !inlineCookiePayload.xs) { skipped++; continue; }
-      
-      await enqueueAddCardJob({ 
-        cookieId: cookieIdStr,
-        cardId: card._id.toString(),
-        proxyConfig,
-        maxConcurrent: body.maxConcurrent,
-        retryAttempts: body.retryAttempts,
-        preferences: mergedPrefs,
-        inlineCookiePayload,
-      } as any, {
-        attempts: body.retryAttempts,
-        backoff: { type: 'exponential', delay: 2000 },
-        removeOnComplete: 100,
-        removeOnFail: 50
-      });
-      
-      enqueued++;
+
+      if (env.ENABLE_REDIS) {
+        const job = await enqueueAddCardJob({ 
+          cookieId: cookieIdStr,
+          cardId: card._id.toString(),
+          proxyConfig,
+          maxConcurrent: body.maxConcurrent,
+          retryAttempts: body.retryAttempts,
+          preferences: mergedPrefs,
+          inlineCookiePayload,
+        } as any, {
+          attempts: body.retryAttempts,
+          backoff: { type: 'exponential', delay: 2000 },
+          removeOnComplete: 100,
+          removeOnFail: 50
+        });
+        jobs.push({ cookieId: cookieIdStr, jobId: String((job as any).id) });
+        enqueued++;
+      } else {
+        const fakeJobId = `${Date.now()}_${i}`;
+        emitProgress({ jobId: fakeJobId, progress: 0, status: 'waiting' });
+        try {
+          await runJob({ cookieId: cookieIdStr, cardId: card._id.toString(), proxyConfig, preferences: mergedPrefs, inlineCookiePayload } as any, { id: fakeJobId } as any);
+          emitProgress({ jobId: fakeJobId, progress: 100, status: 'completed' });
+        } catch (e: any) {
+          emitProgress({ jobId: fakeJobId, progress: -1, status: 'failed', message: e?.message || 'failed' });
+        }
+        jobs.push({ cookieId: cookieIdStr, jobId: fakeJobId });
+        enqueued++;
+      }
     }
     
     return { 
@@ -186,7 +200,8 @@ export async function jobRoutes(app: any) {
       skipped,
       totalCookies: cookies.length,
       totalCards: cards.length,
-      maxConcurrent: body.maxConcurrent
+      maxConcurrent: body.maxConcurrent,
+      jobs,
     };
   });
 
