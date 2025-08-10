@@ -27,21 +27,23 @@ app.register(cors, { origin: env.CORS_ORIGIN, credentials: true });
 app.register(rateLimit, { max: 300, timeWindow: '1 minute' });
 app.register(cookie);
 
-connectToDatabase().then(() => {
-  app.register(authRoutes);
-  app.register(uploadRoutes);
-  app.register(jobRoutes);
-  app.register(statsRoutes);
-  app.register(serverRoutes);
-  app.register(cardsRoutes);
-}).catch((err: unknown) => {
-  console.error('Database connection failed', err);
-  process.exit(1);
-});
+// Register routes BEFORE server starts
+app.register(authRoutes);
+app.register(uploadRoutes);
+app.register(jobRoutes);
+app.register(statsRoutes);
+app.register(serverRoutes);
+app.register(cardsRoutes);
 
-app.listen({ port: env.PORT, host: '0.0.0.0' }).then(() => {
-  console.log(`Server listening on port ${env.PORT}`);
-}).catch((err: unknown) => {
-  console.error('Failed to start server', err);
-  process.exit(1);
-}); 
+async function start() {
+  try {
+    await connectToDatabase();
+    await app.listen({ port: env.PORT, host: '0.0.0.0' });
+    console.log(`Server listening on port ${env.PORT}`);
+  } catch (err) {
+    console.error('Failed to start server', err);
+    process.exit(1);
+  }
+}
+
+start(); 
