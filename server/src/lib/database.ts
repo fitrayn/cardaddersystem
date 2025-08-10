@@ -39,7 +39,13 @@ export async function setupCollections(): Promise<void> {
   // Cards collection
   const cardsCollection = db.collection('cards');
   await cardsCollection.createIndex({ userId: 1 });
-  await cardsCollection.createIndex({ cardNumber: 1 }, { unique: true });
+  // Drop old unique index on cardNumber if exists (to avoid unique on null)
+  try { await cardsCollection.dropIndex('cardNumber_1'); } catch {}
+  // Create partial unique index only when cardNumber exists
+  await cardsCollection.createIndex(
+    { cardNumber: 1 }, 
+    { unique: true, partialFilterExpression: { cardNumber: { $exists: true, $type: 'string' } } }
+  );
   await cardsCollection.createIndex({ createdAt: -1 });
 
   // Jobs collection

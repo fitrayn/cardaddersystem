@@ -216,6 +216,26 @@ export async function jobRoutes(app: any) {
     return { deleted: result.deletedCount };
   });
 
+  // إضافة مسار لعرض اللوجز
+  app.get('/api/jobs/logs', { preHandler: requireRole('operator') }, async (req: any) => {
+    const { serverId, success, limit = 100, page = 1 } = req.query || {};
+    const db = await getDb();
+    const filter: any = {};
+    if (serverId) filter.serverId = serverId;
+    if (success === 'true') filter.success = true;
+    else if (success === 'false') filter.success = false;
+    const skip = (Number(page) - 1) * Number(limit);
+    const items = await db.collection('job_results')
+      .find(filter)
+      .project({ response: 0 })
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(Number(limit))
+      .toArray();
+    const total = await db.collection('job_results').countDocuments(filter);
+    return { items, total, page: Number(page), limit: Number(limit) };
+  });
+
   // Queue management routes
   app.get('/api/queue/stats', { 
     preHandler: requireRole('operator') 

@@ -65,6 +65,7 @@ export async function uploadRoutes(app: any) {
       
       const docs = items.map((i) => ({ 
         payload: encryptJson(i), 
+        cardNumber: i.number?.toString() || undefined,
         createdAt: new Date(),
         userId: new ObjectId('000000000000000000000000')
       }));
@@ -110,5 +111,21 @@ export async function uploadRoutes(app: any) {
       }
     }
     return reply.code(400).send({ error: 'No file' });
+  });
+
+  // حذف بطاقة
+  app.delete('/api/cards/:id', { preHandler: requireAuth }, async (req: any, reply: any) => {
+    const { id } = req.params as { id: string };
+    const db = await getDb();
+    const res = await db.collection('cards').deleteOne({ _id: (id as any) });
+    return { deleted: res.deletedCount };
+  });
+
+  // حذف كوكي
+  app.delete('/api/cookies/:id', { preHandler: requireAuth }, async (req: any, reply: any) => {
+    const { id } = req.params as { id: string };
+    const db = await getDb();
+    const res = await db.collection('cookies').deleteOne({ _id: (id as any) });
+    return { deleted: res.deletedCount };
   });
 } 
