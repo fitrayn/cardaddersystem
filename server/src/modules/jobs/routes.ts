@@ -96,6 +96,7 @@ export async function jobRoutes(app: any) {
     // Create job pairs
     const pairs = Math.min(cookies.length, cards.length);
     let enqueued = 0;
+    const jobs: { cookieId: string; jobId: string }[] = [];
     
     for (let i = 0; i < pairs; i++) {
       const cookie = cookies[i];
@@ -106,21 +107,17 @@ export async function jobRoutes(app: any) {
       // Get proxy config for this job (if available)
       const proxyConfig = body.proxyConfigs?.[i % (body.proxyConfigs?.length || 1)];
       
-      const jobData = {
+      const job = await enqueueAddCardJob({
         cookieId: cookie._id.toString(),
         cardId: card._id.toString(),
         proxyConfig,
-        maxConcurrent: body.maxConcurrent,
-        retryAttempts: body.retryAttempts
-      };
-      
-      await enqueueAddCardJob(jobData, {
+      }, {
         attempts: body.retryAttempts,
         backoff: { type: 'exponential', delay: 2000 },
         removeOnComplete: 100,
         removeOnFail: 50
       });
-      
+      jobs.push({ cookieId: cookie._id.toString(), jobId: String((job as any)?.id || '') });
       enqueued++;
     }
     
@@ -128,7 +125,8 @@ export async function jobRoutes(app: any) {
       enqueued,
       totalCookies: cookies.length,
       totalCards: cards.length,
-      maxConcurrent: body.maxConcurrent
+      maxConcurrent: body.maxConcurrent,
+      jobs,
     };
   });
 

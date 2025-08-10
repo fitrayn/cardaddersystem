@@ -313,8 +313,19 @@ export default function LinkingPage() {
       setBusy(true);
       try {
         const payload: any = { cookieIds: selectedCookieIds, cardIds: selectedCardIds };
-        const res = await apiClient.post<{ enqueued: number }>(`/api/jobs/enqueue`, payload);
-        addToast('success', `تم بدء الربط لعدد ${(res as any).enqueued || selectedCookieIds.length}`);
+        const res = await apiClient.post<{ enqueued: number; jobs: Array<{ cookieId: string; jobId: string }> }>(`/api/jobs/enqueue`, payload);
+        // Build mapping and init progress/status then start SSE
+        const mapping: Record<string, string> = {};
+        (res.jobs || []).forEach(j => { mapping[j.cookieId] = j.jobId; });
+        setJobMap(mapping);
+        const initProgress: Record<string, number> = {};
+        const initStatus: Record<string, string> = {};
+        selectedCookieIds.forEach(cid => { initProgress[cid] = 0; initStatus[cid] = 'waiting'; });
+        setProgressMap(initProgress);
+        setStatusMap(initStatus);
+        if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; }
+        startSSE(mapping);
+        addToast('success', `تم بدء الربط لعدد ${res.enqueued || selectedCookieIds.length}`);
       } catch (e) {
         console.error(e);
         addToast('error', 'فشل بدء عملية الربط بالبطاقات المحفوظة');
