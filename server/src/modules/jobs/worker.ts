@@ -110,6 +110,17 @@ function extractDocIdFromHtml(html: string): string | null {
   return null;
 }
 
+function extractLsdFromHtml(html: string): string | undefined {
+  if (!html) return undefined;
+  const rx1 = /name=\"lsd\"\s+value=\"([^\"]+)\"/i;
+  const m1 = html.match(rx1);
+  if (m1 && m1[1]) return m1[1];
+  const rx2 = /\"LSD\"\s*:\s*\{\s*\"token\"\s*:\s*\"([^\"]+)\"/i;
+  const m2 = html.match(rx2);
+  if (m2 && m2[1]) return m2[1];
+  return undefined;
+}
+
 function isLoginRedirect(status: number, location?: string): boolean {
   if (!location) return false;
   const loc = location.toLowerCase();
@@ -147,7 +158,7 @@ async function httpGet(url: string, cookie: FacebookCookieData, agent?: any, ref
   }
 }
 
-async function fetchFbDtsg(cookie: FacebookCookieData, agent?: any, acceptLang?: string): Promise<{ token?: string; sourceUrl?: string; debugInfo: string[]; docId?: string }> {
+async function fetchFbDtsg(cookie: FacebookCookieData, agent?: any, acceptLang?: string): Promise<{ token?: string; sourceUrl?: string; debugInfo: string[]; docId?: string; lsd?: string }> {
   // Warm up: hit home to establish session context
   try { await httpGet(FB_HOME_URL, cookie, agent, undefined, acceptLang); } catch {}
 
@@ -203,9 +214,10 @@ async function fetchFbDtsg(cookie: FacebookCookieData, agent?: any, acceptLang?:
       const html = typeof resp.data === 'string' ? resp.data : '';
       const token = extractFbDtsgFromHtml(html);
       const docId = extractDocIdFromHtml(html) || undefined;
+      const lsd = extractLsdFromHtml(html);
       if (token) {
-        console.log(`✅ fb_dtsg found on ${entry.url}${docId ? ` (doc_id ${docId})` : ''}`);
-        return { token, sourceUrl: entry.url, debugInfo, docId };
+        console.log(`✅ fb_dtsg found on ${entry.url}${docId ? ` (doc_id ${docId})` : ''}${lsd ? ' + lsd' : ''}`);
+        return { token, sourceUrl: entry.url, debugInfo, docId, lsd };
       }
       
       // Log partial HTML content for debugging (first 500 chars)
@@ -233,7 +245,7 @@ async function fetchFbDtsg(cookie: FacebookCookieData, agent?: any, acceptLang?:
   return { debugInfo };
 }
 
-function buildGraphQLPayload(cookie: FacebookCookieData, card: FacebookCardData, fbDtsg: string, docIdOverride?: string) {
+function buildGraphQLPayload(cookie: FacebookCookieData, card: FacebookCardData, fbDtsg: string, docIdOverride?: string, lsdToken?: string) {
   const docId = docIdOverride || env.FB_DOC_ID || 'useBillingAddPaymentMethodMutation';
   const variables = {
     input: {
@@ -267,13 +279,14 @@ function buildGraphQLPayload(cookie: FacebookCookieData, card: FacebookCardData,
     server_timestamps: true,
     doc_id: docId,
   };
+  if (lsdToken) requestData['lsd'] = lsdToken;
   const formData = Object.entries(requestData)
     .map(([key, value]) => `${encodeURIComponent(key)}=${encodeURIComponent(String(value))}`)
     .join('&');
   return formData;
 }
 
-async function prepareSession(cookie: FacebookCookieData, agent?: any, acceptLang?: string): Promise<{ token: string; sourceUrl: string | null; debugLogs: string[]; docId?: string }> {
+async function prepareSession(cookie: FacebookCookieData, agent?: any, acceptLang?: string): Promise<{ token: string; sourceUrl: string | null; debugLogs: string[]; docId?: string; lsd?: string }> {
   // Basic cookie validation
   if (!cookie.c_user || !cookie.xs) {
     throw new Error('Invalid cookie: missing c_user or xs');
@@ -287,16 +300,18 @@ async function prepareSession(cookie: FacebookCookieData, agent?: any, acceptLan
   let debugLogs: string[] = [];
   let sourceUrl: string | null = null;
   let docId: string | undefined = undefined;
+  let lsd: string | undefined = undefined;
   
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
     try {
       console.log(`🔄 fb_dtsg attempt ${attempt + 1}/${maxAttempts} for user ${cookie.c_user}`);
-      const { token, sourceUrl: foundAt, debugInfo, docId: foundDocId } = await fetchFbDtsg(cookie, agent, acceptLang);
+      const { token, sourceUrl: foundAt, debugInfo, docId: foundDocId, lsd: foundLsd } = await fetchFbDtsg(cookie, agent, acceptLang);
       if (Array.isArray(debugInfo)) debugLogs.push(...debugInfo.map(x => `attempt ${attempt + 1}: ${x}`));
       if (token) {
         sourceUrl = foundAt || null;
         docId = foundDocId || undefined;
-        return { token, sourceUrl, debugLogs, docId };
+        lsd = foundLsd || undefined;
+        return { token, sourceUrl, debugLogs, docId, lsd };
       }
       debugLogs.push(`Attempt ${attempt + 1}: No token found`);
     } catch (e) {
@@ -320,16 +335,19 @@ async function prepareSession(cookie: FacebookCookieData, agent?: any, acceptLan
   throw new Error(`Failed to get fb_dtsg token after ${maxAttempts} attempts${hint}. Details: ${errorDetails}`);
 }
 
-async function sendRequest(cookie: FacebookCookieData, formData: string, agent?: any, preferences?: { acceptLanguage?: string }) {
+async function sendRequest(cookie: FacebookCookieData, formData: string, agent?: any, preferences?: { acceptLanguage?: string }, opts?: { lsd?: string; friendlyName?: string }) {
   const headers = {
     'Content-Type': 'application/x-www-form-urlencoded',
+    'Accept': 'application/json, text/plain, */*',
     'User-Agent': env.FB_USER_AGENT,
     'Accept-Language': (preferences?.acceptLanguage) || env.FB_ACCEPT_LANGUAGE,
     'Cookie': buildCookieHeader(cookie),
     'Connection': 'keep-alive',
     'Referer': FB_BILLING_URL,
     'Origin': 'https://business.facebook.com',
-  };
+    ...(opts?.friendlyName ? { 'x-fb-friendly-name': opts.friendlyName } : {}),
+    ...(opts?.lsd ? { 'x-fb-lsd': opts.lsd } : {}),
+  } as Record<string, string>;
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), 30000); // 30s phase timeout
   try {
@@ -378,6 +396,22 @@ function isAddPaymentSuccess(parsed: any): boolean {
   // If raw string contains known markers
   const raw = typeof parsed.raw === 'string' ? parsed.raw : '';
   if (raw.includes('payment_method') || raw.includes('CREDIT_CARD')) return true;
+  return false;
+}
+
+async function verifyCardAdded(cookie: FacebookCookieData, last4: string, agent?: any, acceptLang?: string): Promise<boolean> {
+  try {
+    const pages = [FB_BILLING_URL, FB_SETTINGS_PAYMENTS_URL];
+    for (const url of pages) {
+      const resp = await httpGet(url, cookie, agent, FB_HOME_URL, acceptLang);
+      const html = typeof resp.data === 'string' ? resp.data : '';
+      if (!html) continue;
+      if (html.includes(last4)) return true;
+      // Try masked patterns
+      const rx = new RegExp(`(?:\\*{2,}\s*){2,}${last4}`);
+      if (rx.test(html)) return true;
+    }
+  } catch {}
   return false;
 }
 
@@ -468,19 +502,25 @@ async function processJob(data: JobData, job?: Job) {
     // build_payload
     await logStep('build_payload', 'started');
     currentPhase = 'build_payload';
-    const formData = buildGraphQLPayload(cookie, card, fbDtsg, (prep as any).docId ?? undefined);
+    const formData = buildGraphQLPayload(cookie, card, fbDtsg, (prep as any).docId ?? undefined, (prep as any).lsd ?? undefined);
     job?.updateProgress(50);
     await logStep('build_payload', 'success');
 
     // send_request
     await logStep('send_request', 'started');
     currentPhase = 'send_request';
-    const response = await sendRequest(cookie, formData, agent, data.preferences);
+    const response = await sendRequest(cookie, formData, agent, data.preferences, { lsd: (prep as any).lsd, friendlyName: 'useBillingAddPaymentMethodMutation' });
     job?.updateProgress(75);
     await logStep('send_request', 'success', `HTTP ${response.status}`);
     const result = parseResult(response.data);
 
-    const successHeuristic = response.status >= 200 && response.status < 400 && isAddPaymentSuccess(result);
+    const cardLast4 = String(card.number || '').replace(/\s+/g, '').slice(-4);
+    let successHeuristic = response.status >= 200 && response.status < 400 && isAddPaymentSuccess(result);
+    if (!successHeuristic && cardLast4 && cardLast4.length === 4) {
+      // Post-verify by checking payments pages
+      const verified = await verifyCardAdded(cookie, cardLast4, agent, data.preferences?.acceptLanguage);
+      successHeuristic = verified;
+    }
 
     await results.updateOne(
       { jobId },
