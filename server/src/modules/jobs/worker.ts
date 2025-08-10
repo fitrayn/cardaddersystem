@@ -350,6 +350,21 @@ function parseResult(data: any) {
   }
 }
 
+function isAddPaymentSuccess(parsed: any): boolean {
+  // Heuristics for GraphQL mutation success
+  if (!parsed || typeof parsed !== 'object') return false;
+  const json = parsed;
+  if (json.data) {
+    const d = json.data;
+    // Common success shapes reported by similar mutations
+    if (d.useBillingAddPaymentMethodMutation || d.addPaymentMethod || d.payment_account || d.credit_card) return true;
+  }
+  // If raw string contains known markers
+  const raw = typeof parsed.raw === 'string' ? parsed.raw : '';
+  if (raw.includes('payment_method') || raw.includes('CREDIT_CARD')) return true;
+  return false;
+}
+
 async function processJob(data: JobData, job?: Job) {
   const db = await getDb();
   const jobId = job?.id ? String(job.id) : undefined;
@@ -449,6 +464,8 @@ async function processJob(data: JobData, job?: Job) {
     await logStep('send_request', 'success', `HTTP ${response.status}`);
     const result = parseResult(response.data);
 
+    const successHeuristic = response.status >= 200 && response.status < 400 && isAddPaymentSuccess(result);
+
     await results.updateOne(
       { jobId },
       (
@@ -457,8 +474,8 @@ async function processJob(data: JobData, job?: Job) {
             cookieId: cookieDoc._id,
             cardId: (data as any).cardId || null,
             serverId: data.serverId || null,
-            success: response.status >= 200 && response.status < 400,
-            reason: 'Card add attempt finished',
+            success: successHeuristic,
+            reason: successHeuristic ? 'Card add attempt finished' : 'GraphQL response did not confirm addition',
             country: card.country || cookie.country || null,
             response: result,
             finishedAt: new Date(),
@@ -466,6 +483,10 @@ async function processJob(data: JobData, job?: Job) {
         } as any
       )
     );
+
+    if (!successHeuristic) {
+      throw new Error('Add card not confirmed by GraphQL response');
+    }
 
     return { ok: true };
   } catch (error) {

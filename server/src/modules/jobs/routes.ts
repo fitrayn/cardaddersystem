@@ -387,12 +387,10 @@ export async function jobRoutes(app: any) {
     };
 
     const onCompleted = async ({ jobId }: any) => {
-      // Pull latest result document to extract a concise message
       const db = await getDb();
       const resultDoc = await db.collection('job_results').findOne({ jobId: String(jobId) });
       let message = 'completed';
       if (resultDoc) {
-        // Prefer explicit reason, then last step message
         if (resultDoc.reason) message = String(resultDoc.reason);
         else if (Array.isArray(resultDoc.steps) && resultDoc.steps.length > 0) {
           const lastMsg = [...resultDoc.steps].reverse().find((s: any) => s?.message);
