@@ -1,9 +1,10 @@
 import type { FastifyInstance } from 'fastify';
 import { requireRole } from '../../middleware/auth';
-import { enqueueAddCardJob, getQueueStats, pauseQueue, resumeQueue, clearQueue, getJobDetails } from '../../lib/queue';
+import { enqueueAddCardJob, getQueueStats, pauseQueue, resumeQueue, clearQueue, getJobDetails, getQueueEvents } from '../../lib/queue';
 import { getDb } from '../../lib/mongo';
 import { z } from 'zod';
 import { encryptJson } from '../../lib/encryption';
+import { ObjectId } from 'mongodb';
 
 const preferencesSchema = z.object({
   acceptLanguage: z.string().optional(),
@@ -19,6 +20,12 @@ const preferencesSchema = z.object({
   adAccountId: z.string().optional(),
   usePrimaryAdAccount: z.boolean().optional(),
 }).optional();
+
+function toMongoIds(ids: string[]): any[] {
+  return ids.map((id) => {
+    try { return new ObjectId(id); } catch { return id as any; }
+  });
+}
 
 const enqueueJobSchema = z.object({
   cookieIds: z.array(z.string()),
@@ -38,6 +45,31 @@ const enqueueJobSchema = z.object({
 });
 
 export async function jobRoutes(app: any) {
+  app.get('/api/jobs/events', { preHandler: requireRole('operator') }, async (req: any, reply: any) => {
+    reply.raw.writeHead(200, {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache, no-transform',
+      Connection: 'keep-alive',
+      'Access-Control-Allow-Origin': '*',
+    });
+    reply.raw.write('\n');
+
+    const events = getQueueEvents();
+    const onProgress = (data: any) => {
+      try {
+        const payload = { jobId: data.jobId || data.id || data.job || null, progress: data.progress, status: data.event || 'progress' };
+        reply.raw.write(`event: progress\n`);
+        reply.raw.write(`data: ${JSON.stringify(payload)}\n\n`);
+      } catch {}
+    };
+    // BullMQ QueueEvents emits 'progress' with { jobId, data }
+    (events as any).on('progress', onProgress);
+
+    req.raw.on('close', () => {
+      try { (events as any).off('progress', onProgress); } catch {}
+    });
+  });
+
   app.post('/api/jobs/enqueue', { 
     preHandler: requireRole('operator'),
     schema: {
@@ -73,12 +105,15 @@ export async function jobRoutes(app: any) {
     const body = enqueueJobSchema.parse(req.body);
     const db = await getDb();
     
+    const cookieObjectIds = body.cookieIds.map((id) => new ObjectId(id));
+    const cardObjectIds = body.cardIds.map((id) => new ObjectId(id));
+
     const cookies = await db.collection('cookies').find({
-      _id: { $in: body.cookieIds.map(id => (id as any)) }
+      _id: { $in: cookieObjectIds }
     }).toArray();
     
     const cards = await db.collection('cards').find({
-      _id: { $in: body.cardIds.map(id => (id as any)) }
+      _id: { $in: cardObjectIds }
     }).toArray();
     
     if (cookies.length === 0 || cards.length === 0) {
@@ -143,8 +178,9 @@ export async function jobRoutes(app: any) {
       return reply.code(400).send({ error: 'Invalid or empty batch' });
     }
 
+    const cookieObjectIds = body.cookieIds.map((id: string) => new ObjectId(id));
     const cookies = await db.collection('cookies').find({
-      _id: { $in: body.cookieIds.map((id: string) => (id as any)) }
+      _id: { $in: cookieObjectIds }
     }).toArray();
     if (cookies.length === 0) return reply.code(400).send({ error: 'No cookies found' });
 
@@ -159,7 +195,6 @@ export async function jobRoutes(app: any) {
       const item = batch.items[i];
       if (!cookie || !item) continue;
 
-      // Insert temp card doc
       const cardPayload = {
         number: String(item.number || ''),
         exp_month: String(item.exp_month || ''),
