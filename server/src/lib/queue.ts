@@ -22,7 +22,10 @@ if (!env.REDIS_URL) {
     clean: () => Promise.resolve(),
     getJob: () => Promise.resolve(null)
   };
-  addCardQueueEvents = {};
+  addCardQueueEvents = {
+    on: () => {},
+    off: () => {},
+  } as any;
 } else {
   try {
     connection = getRedis();
@@ -53,7 +56,10 @@ if (!env.REDIS_URL) {
       clean: () => Promise.resolve(),
       getJob: () => Promise.resolve(null)
     };
-    addCardQueueEvents = {};
+    addCardQueueEvents = {
+      on: () => {},
+      off: () => {},
+    } as any;
   }
 }
 
@@ -73,6 +79,7 @@ export interface AddCardJobData {
   maxConcurrent?: number;
   retryAttempts?: number;
   priority?: number;
+  preferences?: any;
 }
 
 export function enqueueAddCardJob(data: AddCardJobData, opts?: JobsOptions) {
@@ -200,4 +207,8 @@ export async function getJobDetails(jobId: string) {
     finishedOn: job.finishedOn,
     failedReason: job.failedReason
   };
+}
+
+export function getQueueEvents() {
+  return addCardQueueEvents as QueueEvents;
 } 
