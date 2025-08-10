@@ -5,7 +5,6 @@ export const apiConfig = {
   baseURL: API_BASE_URL,
   timeout: 10000,
   headers: {
-    'Content-Type': 'application/json',
   },
 };
 
@@ -44,7 +43,6 @@ export class ApiClient {
   constructor() {
     this.baseURL = API_BASE_URL;
     this.headers = {
-      'Content-Type': 'application/json',
     };
   }
 
@@ -54,11 +52,22 @@ export class ApiClient {
   ): Promise<T> {
     const url = `${this.baseURL}${endpoint}`;
     
+    const headers: Record<string, string> = {
+      ...this.headers,
+      ...(options.headers as Record<string, string> || {}),
+    };
+
+    // Only set JSON content-type when we have a string body (not FormData)
+    const hasBody = options.body !== undefined && options.body !== null;
+    const isFormData = typeof FormData !== 'undefined' && hasBody && options.body instanceof FormData;
+    if (!hasBody || isFormData) {
+      delete headers['Content-Type'];
+    } else if (!headers['Content-Type']) {
+      headers['Content-Type'] = 'application/json';
+    }
+
     const config: RequestInit = {
-      headers: {
-        ...this.headers,
-        ...options.headers,
-      },
+      headers,
       ...options,
     };
 
@@ -86,25 +95,28 @@ export class ApiClient {
 
   // POST request
   async post<T>(endpoint: string, data?: any): Promise<T> {
+    const body = data instanceof FormData ? data : (data ? JSON.stringify(data) : undefined);
     return this.request<T>(endpoint, {
       method: 'POST',
-      body: data ? JSON.stringify(data) : undefined,
+      body,
     });
   }
 
   // PUT request
   async put<T>(endpoint: string, data?: any): Promise<T> {
+    const body = data instanceof FormData ? data : (data ? JSON.stringify(data) : undefined);
     return this.request<T>(endpoint, {
       method: 'PUT',
-      body: data ? JSON.stringify(data) : undefined,
+      body,
     });
   }
 
   // PATCH request
   async patch<T>(endpoint: string, data?: any): Promise<T> {
+    const body = data instanceof FormData ? data : (data ? JSON.stringify(data) : undefined);
     return this.request<T>(endpoint, {
       method: 'PATCH',
-      body: data ? JSON.stringify(data) : undefined,
+      body,
     });
   }
 
