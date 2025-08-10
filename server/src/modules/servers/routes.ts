@@ -4,7 +4,7 @@ import { requireAuth } from '../../middleware/auth';
 
 export async function serverRoutes(fastify: any) {
   // الحصول على جميع السيرفرات للمستخدم
-  fastify.get('/servers', {
+  fastify.get('/api/servers', {
     preHandler: requireAuth,
     handler: async (request: any, reply: any) => {
       try {
@@ -25,7 +25,7 @@ export async function serverRoutes(fastify: any) {
   });
 
   // الحصول على سيرفر واحد
-  fastify.get('/servers/:id', {
+  fastify.get('/api/servers/:id', {
     preHandler: requireAuth,
     handler: async (request: any, reply: any) => {
       try {
@@ -55,7 +55,7 @@ export async function serverRoutes(fastify: any) {
   });
 
   // إنشاء سيرفر جديد
-  fastify.post('/servers', {
+  fastify.post('/api/servers', {
     preHandler: requireAuth,
     schema: {
       body: {
@@ -111,7 +111,7 @@ export async function serverRoutes(fastify: any) {
   });
 
   // تحديث سيرفر
-  fastify.put('/servers/:id', {
+  fastify.put('/api/servers/:id', {
     preHandler: requireAuth,
     schema: {
       body: {
@@ -173,7 +173,7 @@ export async function serverRoutes(fastify: any) {
   });
 
   // حذف سيرفر
-  fastify.delete('/servers/:id', {
+  fastify.delete('/api/servers/:id', {
     preHandler: requireAuth,
     handler: async (request: any, reply: any) => {
       try {
@@ -203,7 +203,7 @@ export async function serverRoutes(fastify: any) {
   });
 
   // تفعيل/إلغاء تفعيل سيرفر
-  fastify.patch('/servers/:id/toggle', {
+  fastify.patch('/api/servers/:id/toggle', {
     preHandler: requireAuth,
     handler: async (request: any, reply: any) => {
       try {
@@ -234,7 +234,7 @@ export async function serverRoutes(fastify: any) {
   });
 
   // فحص صحة السيرفر
-  fastify.post('/servers/:id/health-check', {
+  fastify.post('/api/servers/:id/health-check', {
     preHandler: requireAuth,
     handler: async (request: any, reply: any) => {
       try {
@@ -258,7 +258,7 @@ export async function serverRoutes(fastify: any) {
   });
 
   // الحصول على السيرفرات المتاحة
-  fastify.get('/servers/available', {
+  fastify.get('/api/servers/available', {
     preHandler: requireAuth,
     handler: async (request: any, reply: any) => {
       try {
@@ -279,7 +279,7 @@ export async function serverRoutes(fastify: any) {
   });
 
   // إحصائيات السيرفرات
-  fastify.get('/servers/stats', {
+  fastify.get('/api/servers/stats', {
     preHandler: requireAuth,
     handler: async (request: any, reply: any) => {
       try {
