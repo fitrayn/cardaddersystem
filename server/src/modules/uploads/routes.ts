@@ -1,5 +1,5 @@
 import type { FastifyInstance } from 'fastify';
-import { requireRole } from '../../middleware/auth';
+import { requireAuth } from '../../middleware/auth';
 import { getDb } from '../../lib/mongo';
 import { encryptJson } from '../../lib/encryption';
 import { z } from 'zod';
@@ -19,7 +19,7 @@ const cardSchema = z.object({
 export async function uploadRoutes(app: any) {
   app.register(multipart);
 
-  app.post('/api/upload/cookies/json', { preHandler: requireRole('operator') }, async (req: any, reply: any) => {
+  app.post('/api/upload/cookies/json', { preHandler: requireAuth }, async (req: any, reply: any) => {
     try {
       const body = req.body as any[];
       if (!Array.isArray(body)) {
@@ -49,7 +49,7 @@ export async function uploadRoutes(app: any) {
     }
   });
 
-  app.post('/api/upload/cards/json', { preHandler: requireRole('operator') }, async (req: any, reply: any) => {
+  app.post('/api/upload/cards/json', { preHandler: requireAuth }, async (req: any, reply: any) => {
     try {
       const body = req.body as any[];
       if (!Array.isArray(body)) {
@@ -79,7 +79,7 @@ export async function uploadRoutes(app: any) {
     }
   });
 
-  app.post('/api/upload/cookies/csv', { preHandler: requireRole('operator') }, async (req: any, reply: any) => {
+  app.post('/api/upload/cookies/csv', { preHandler: requireAuth }, async (req: any, reply: any) => {
     const parts = req.parts();
     for await (const part of parts) {
       if (part.type === 'file') {
@@ -95,7 +95,7 @@ export async function uploadRoutes(app: any) {
     return reply.code(400).send({ error: 'No file' });
   });
 
-  app.post('/api/upload/cards/csv', { preHandler: requireRole('operator') }, async (req: any, reply: any) => {
+  app.post('/api/upload/cards/csv', { preHandler: requireAuth }, async (req: any, reply: any) => {
     const parts = req.parts();
     for await (const part of parts) {
       if (part.type === 'file') {

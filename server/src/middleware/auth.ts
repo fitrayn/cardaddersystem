@@ -24,9 +24,15 @@ export function requireRole(role: 'admin' | 'user' | 'operator') {
     await requireAuth(request, reply);
     const user = request.user as UserToken | undefined;
     if (!user) return; // already handled
+    
+    // Check role permissions
     if (role === 'admin' && user.role !== 'admin') {
-      return reply.code(403).send({ error: 'Forbidden' });
+      return reply.code(403).send({ error: 'Forbidden: Admin access required' });
     }
+    if (role === 'operator' && user.role !== 'admin' && user.role !== 'operator') {
+      return reply.code(403).send({ error: 'Forbidden: Operator access required' });
+    }
+    
     return; // Allow the request to continue
   };
 } 
