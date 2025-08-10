@@ -11,7 +11,25 @@ export function getRedis(): any {
     return { status: 'mock' } as any;
   }
 
-  const url = env.REDIS_URL;
+  // Prefer REDIS_URL; fallback to Upstash REST credentials if present
+  let url = env.REDIS_URL;
+  if (!url && env.UPSTASH_REDIS_REST_URL && env.UPSTASH_REDIS_REST_TOKEN) {
+    try {
+      const u = new URL(env.UPSTASH_REDIS_REST_URL);
+      // Upstash REST cannot be used by ioredis; attempt to synthesize rediss URL if hostname/port matches
+      // Example: https://<host> => rediss://<host>:6379
+      const host = u.host; // includes hostname[:port]
+      const [hostname, portMaybe] = host.split(':');
+      const port = portMaybe || '6379';
+      // Upstash typically requires a password (token). Use it in URL userinfo
+      url = `rediss://default:${encodeURIComponent(env.UPSTASH_REDIS_REST_TOKEN)}@${hostname}:${port}`;
+      console.info('[redis] Synthesized REDIS_URL from Upstash REST env');
+    } catch (e) {
+      console.warn('[redis] Failed to synthesize REDIS_URL from Upstash env; using mock');
+      return { status: 'mock' } as any;
+    }
+  }
+
   if (!url) {
     console.warn('[redis] REDIS_URL not set. Using mock queue (no Redis connection).');
     return { status: 'mock' } as any;
