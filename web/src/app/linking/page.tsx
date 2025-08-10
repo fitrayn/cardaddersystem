@@ -116,6 +116,7 @@ export default function LinkingPage() {
   const [jobMap, setJobMap] = useState<Record<string, string>>({}); // cookieId -> jobId
   const [progressMap, setProgressMap] = useState<Record<string, number>>({}); // cookieId -> progress
   const [statusMap, setStatusMap] = useState<Record<string, string>>({}); // cookieId -> status
+  const [messageMap, setMessageMap] = useState<Record<string, string>>({}); // cookieId -> message
 
   const [busy, setBusy] = useState(false);
   const pollRef = useRef<NodeJS.Timeout | null>(null);
@@ -266,12 +267,13 @@ export default function LinkingPage() {
             if (dataLine) {
               try {
                 const payload = JSON.parse(dataLine.slice(6));
-                const { jobId, progress, status } = payload;
+                const { jobId: sseJobId, progress: sseProgress, status: sseStatus, message: sseMessage } = payload;
                 // Map jobId -> cookieId
-                const cookieId = Object.entries(mapping).find(([, jid]) => jid === String(jobId))?.[0];
+                const cookieId = Object.entries(mapping).find(([, jid]) => jid === String(sseJobId))?.[0];
                 if (cookieId) {
-                  setProgressMap(prev => ({ ...prev, [cookieId]: typeof progress === 'number' ? progress : (prev[cookieId] || 0) }));
-                  setStatusMap(prev => ({ ...prev, [cookieId]: status || prev[cookieId] || 'unknown' }));
+                  setProgressMap(prev => ({ ...prev, [cookieId]: typeof sseProgress === 'number' ? sseProgress : (prev[cookieId] || 0) }));
+                  setStatusMap(prev => ({ ...prev, [cookieId]: sseStatus || prev[cookieId] || 'unknown' }));
+                  if (sseMessage) setMessageMap(prev => ({ ...prev, [cookieId]: sseMessage }));
                 }
               } catch {}
             }
@@ -548,6 +550,7 @@ export default function LinkingPage() {
                 const serverName = selectedServerIds.length > 0 ? servers.find(s => String(s._id) === selectedServerIds[idx % selectedServerIds.length])?.name : '-';
                 const prog = progressMap[id] ?? 0;
                 const status = statusMap[id] ?? '-';
+                const message = messageMap[id] ?? '';
                 return (
                   <tr key={id} className="border-b">
                     <td className="p-2 text-center">
@@ -563,7 +566,7 @@ export default function LinkingPage() {
                       </div>
                       <div className="text-xs text-slate-800 mt-1">{prog}%</div>
                     </td>
-                    <td className="p-2 text-xs text-slate-800">{status}</td>
+                    <td className="p-2 text-xs text-slate-800">{status}{message ? ` - ${message}` : ''}</td>
                   </tr>
                 );
               })}

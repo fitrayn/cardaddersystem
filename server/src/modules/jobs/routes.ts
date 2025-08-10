@@ -387,13 +387,37 @@ export async function jobRoutes(app: any) {
     };
 
     const onCompleted = async ({ jobId }: any) => {
-      const payload = JSON.stringify({ jobId: String(jobId), progress: 100, status: 'completed' });
+      // Pull latest result document to extract a concise message
+      const db = await getDb();
+      const resultDoc = await db.collection('job_results').findOne({ jobId: String(jobId) });
+      let message = 'completed';
+      if (resultDoc) {
+        // Prefer explicit reason, then last step message
+        if (resultDoc.reason) message = String(resultDoc.reason);
+        else if (Array.isArray(resultDoc.steps) && resultDoc.steps.length > 0) {
+          const lastMsg = [...resultDoc.steps].reverse().find((s: any) => s?.message);
+          if (lastMsg?.message) message = String(lastMsg.message);
+        }
+      }
+      const payload = JSON.stringify({ jobId: String(jobId), progress: 100, status: 'completed', success: true, message });
       reply.raw.write(`event: progress\n`);
       reply.raw.write(`data: ${payload}\n\n`);
     };
 
     const onFailed = async ({ jobId }: any) => {
-      const payload = JSON.stringify({ jobId: String(jobId), progress: -1, status: 'failed' });
+      // Pull failure reason from queue and from our detailed logs
+      const db = await getDb();
+      const [job, resultDoc] = await Promise.all([
+        getJobDetails(String(jobId)),
+        db.collection('job_results').findOne({ jobId: String(jobId) })
+      ]);
+      let message = job?.failedReason || 'failed';
+      if (resultDoc) {
+        const failedStep = Array.isArray(resultDoc.steps) ? [...resultDoc.steps].reverse().find((s: any) => s?.status === 'failed' && s?.message) : null;
+        if (failedStep?.message) message = String(failedStep.message);
+        else if (resultDoc.reason) message = String(resultDoc.reason);
+      }
+      const payload = JSON.stringify({ jobId: String(jobId), progress: -1, status: 'failed', success: false, message });
       reply.raw.write(`event: progress\n`);
       reply.raw.write(`data: ${payload}\n\n`);
     };
