@@ -1,7 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import { requireAuth } from '../../middleware/auth';
 import { getDb } from '../../lib/mongo';
-import { encryptJson } from '../../lib/encryption';
+import { encryptJson, decryptJson } from '../../lib/encryption';
 import { z } from 'zod';
 import multipart from '@fastify/multipart';
 import { parse } from 'csv-parse/sync';
@@ -161,6 +161,56 @@ export async function uploadRoutes(app: any) {
       .limit(Number(limit))
       .toArray();
     const total = await db.collection('cards').countDocuments();
+    return { items, total, page: Number(page), limit: Number(limit) };
+  });
+
+  // البطاقات مع التفاصيل الكاملة وإحصائيات الأسبوع الحالي
+  app.get('/api/cards/with-stats', { preHandler: requireAuth }, async (req: any) => {
+    const { limit = 100, page = 1, days = 7 } = req.query || {};
+    const db = await getDb();
+    const skip = (Number(page) - 1) * Number(limit);
+
+    const since = new Date();
+    since.setDate(since.getDate() - Number(days));
+
+    // إحضار البطاقات (سنحتاج payload لفك التشفير)
+    const cards = await db.collection('cards')
+      .find({})
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(Number(limit))
+      .toArray();
+
+    const total = await db.collection('cards').countDocuments();
+
+    // تجميع الإحصائيات خلال الفترة
+    const statsAgg = await db.collection('job_results').aggregate([
+      { $match: { createdAt: { $gte: since }, cardId: { $exists: true, $ne: null } } },
+      { $group: { _id: '$cardId', attempts: { $sum: 1 }, successes: { $sum: { $cond: [{ $eq: ['$success', true] }, 1, 0] } } } }
+    ]).toArray();
+    const statsMap = new Map<string, { attempts: number; successes: number }>();
+    for (const s of statsAgg) {
+      statsMap.set(String(s._id), { attempts: s.attempts || 0, successes: s.successes || 0 });
+    }
+
+    const items = cards.map((c: any) => {
+      let details: any = null;
+      try {
+        if (c.payload) details = decryptJson<any>(c.payload);
+      } catch {}
+      const stat = statsMap.get(String(c._id)) || { attempts: 0, successes: 0 };
+      return {
+        _id: String(c._id),
+        createdAt: c.createdAt,
+        updatedAt: c.updatedAt,
+        isActive: c.isActive,
+        // تفاصيل البطاقة بعد فك التشفير
+        details,
+        // إحصائيات الأسبوع
+        stats: stat,
+      };
+    });
+
     return { items, total, page: Number(page), limit: Number(limit) };
   });
 
