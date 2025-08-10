@@ -508,13 +508,15 @@ export default function LinkingPage() {
         <h2 className="font-semibold mb-3 text-slate-800">التحكم</h2>
         <div className="flex flex-wrap items-center gap-3">
           <button
-            disabled={!batchId || selectedCookieIds.length === 0 || busy}
+            disabled={(selectedCookieIds.length === 0) || (selectedCardIds.length === 0 && !batchId) || busy}
             onClick={startLinking}
             className="px-4 py-2 rounded bg-green-600 text-white disabled:opacity-50 hover:bg-green-700"
           >
             بدء الربط
           </button>
-          {!batchId && <span className="text-sm text-slate-600">قم بتوليد البطاقات أولًا</span>}
+          {(selectedCardIds.length === 0 && !batchId) && (
+            <span className="text-sm text-slate-600">قم بتوليد البطاقات أولًا أو اختر بطاقات محفوظة</span>
+          )}
           {selectedCookieIds.length === 0 && <span className="text-sm text-slate-600">حدد الكوكيز</span>}
         </div>
       </div>
@@ -577,6 +579,61 @@ export default function LinkingPage() {
           <button className="px-3 py-1 border rounded" onClick={() => setPage(p => Math.max(1, p - 1))}>السابق</button>
           <span>{page} / {totalPages}</span>
           <button className="px-3 py-1 border rounded" onClick={() => setPage(p => Math.min(totalPages, p + 1))}>التالي</button>
+        </div>
+      </div>
+
+      {/* Fingerprint panel (restored) */}
+      <div className="p-4 rounded-lg border border-slate-200 bg-white mt-6">
+        <h2 className="font-semibold mb-3 text-slate-800">البصمة (الدولة/اللغة/المنطقة الزمنية)</h2>
+        <div className="space-y-3">
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="block text-sm text-slate-700">الدولة (ISO-2)</label>
+              <select className="w-full border rounded px-3 py-2" value={country} onChange={(e) => setCountry(e.target.value)}>
+                {Object.keys(COUNTRY_PRESETS).map(c => (
+                  <option key={c} value={c}>{c}</option>
+                ))}
+              </select>
+            </div>
+            <label className="flex items-center gap-2 text-sm text-slate-700 mt-6">
+              <input type="checkbox" checked={useAutoFingerprint} onChange={e => setUseAutoFingerprint(e.target.checked)} />
+              استخدام القيم التلقائية حسب الدولة
+            </label>
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="block text-sm text-slate-700">Accept-Language</label>
+              <select className="w-full border rounded px-3 py-2" value={acceptLanguage} onChange={(e) => setAcceptLanguage(e.target.value)} disabled={useAutoFingerprint}>
+                {languageOptions.map(opt => (
+                  <option key={opt} value={opt}>{opt}</option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="block text-sm text-slate-700">Timezone (IANA)</label>
+              <select className="w-full border rounded px-3 py-2" value={timezone} onChange={(e) => setTimezone(e.target.value)} disabled={useAutoFingerprint}>
+                {timezoneOptions.map(opt => (
+                  <option key={opt} value={opt}>{opt}</option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="block text-sm text-slate-700">Currency (اختياري)</label>
+              <select className="w-full border rounded px-3 py-2" value={currency} onChange={(e) => setCurrency(e.target.value)} disabled={useAutoFingerprint}>
+                <option value="">(None)</option>
+                {currencyOptions.map(opt => (
+                  <option key={opt} value={opt}>{opt}</option>
+                ))}
+              </select>
+            </div>
+          </div>
+          <div className="rounded border border-slate-200 p-3 bg-slate-50 text-xs text-slate-700">
+            <div className="font-medium mb-1">معاينة البصمة</div>
+            <div>Country: {country}</div>
+            <div>Timezone: {timezone || '(auto)'}</div>
+            <div>Accept-Language: {acceptLanguage || '(auto)'}</div>
+            <div>Currency: {currency || '(none)'}</div>
+          </div>
         </div>
       </div>
     </div>
