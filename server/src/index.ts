@@ -27,6 +27,14 @@ app.register(cors, { origin: env.CORS_ORIGIN, credentials: true });
 app.register(rateLimit, { max: 300, timeWindow: '1 minute' });
 app.register(cookie);
 
+// Health endpoint
+app.get('/health', async () => ({
+  status: 'ok',
+  timestamp: new Date().toISOString(),
+  uptime: process.uptime(),
+  env: env.NODE_ENV,
+}));
+
 // Register routes BEFORE server starts
 app.register(authRoutes);
 app.register(uploadRoutes);

@@ -111,6 +111,7 @@ export default function LinkingPage() {
   // Linking target prefs
   const [usePrimaryAdAccount, setUsePrimaryAdAccount] = useState<boolean>(true);
   const [manualAdAccountId, setManualAdAccountId] = useState<string>('');
+  const [perCookieAdIds, setPerCookieAdIds] = useState<Record<string, string>>({});
 
   // Derived options for dropdowns
   const languageOptions = useMemo(() => FB_LANGS[country] || ['en-US,en;q=0.9'], [country]);
@@ -312,7 +313,6 @@ export default function LinkingPage() {
 
   const startLinking = async () => {
     if (selectedCardIds.length > 0) {
-      // Link using selected saved cards via enqueue (cookieIds + cardIds)
       if (selectedCookieIds.length === 0) { addToast('info', 'حدد الكوكيز'); return; }
       setBusy(true);
       try {
@@ -323,9 +323,13 @@ export default function LinkingPage() {
         } else {
           prefs.usePrimaryAdAccount = true;
         }
+        const preferencesByCookieId: Record<string, any> = {};
+        Object.entries(perCookieAdIds).forEach(([cid, val]) => {
+          if (val && val.trim()) preferencesByCookieId[cid] = { adAccountId: val.trim() };
+        });
         payload.preferences = prefs;
+        if (Object.keys(preferencesByCookieId).length > 0) payload.preferencesByCookieId = preferencesByCookieId;
         const res = await apiClient.post<{ enqueued: number; jobs: Array<{ cookieId: string; jobId: string }> }>(`/api/jobs/enqueue`, payload);
-        // Build mapping and init progress/status then start SSE
         const mapping: Record<string, string> = {};
         (res.jobs || []).forEach(j => { mapping[j.cookieId] = j.jobId; });
         setJobMap(mapping);
@@ -542,6 +546,7 @@ export default function LinkingPage() {
             <div>
               <label className="block text-xs text-slate-700">Ad Account ID (act_...)</label>
               <input className="w-full border rounded px-3 py-2" placeholder="act_123... أو 123..." value={manualAdAccountId} onChange={e => setManualAdAccountId(e.target.value)} disabled={usePrimaryAdAccount} />
+              <div className="text-xs text-slate-500 mt-1">يمكن تخصيص ID لكل كوكيز من العمود الجديد في الجدول</div>
             </div>
           </div>
           <div className="space-y-2">
@@ -583,6 +588,7 @@ export default function LinkingPage() {
                 <th className="p-2">تحديد</th>
                 <th className="p-2">Cookie ID</th>
                 <th className="p-2">c_user</th>
+                <th className="p-2">Ad Account (اختياري)</th>
                 <th className="p-2">البطاقة</th>
                 <th className="p-2">السيرفر</th>
                 <th className="p-2">التقدم</th>
@@ -605,6 +611,14 @@ export default function LinkingPage() {
                     </td>
                     <td className="p-2 font-mono text-xs text-slate-900">{id}</td>
                     <td className="p-2 text-slate-800">{c.c_user || '-'}</td>
+                    <td className="p-2">
+                      <input
+                        className="w-48 border rounded px-2 py-1 text-xs"
+                        placeholder="act_123..."
+                        value={perCookieAdIds[id] || ''}
+                        onChange={(e) => setPerCookieAdIds(prev => ({ ...prev, [id]: e.target.value }))}
+                      />
+                    </td>
                     <td className="p-2 text-slate-800">{batchId ? (last4 ? `**** **** **** ${last4}` : '-') : '-'}</td>
                     <td className="p-2 text-slate-800">{serverName || '-'}</td>
                     <td className="p-2">

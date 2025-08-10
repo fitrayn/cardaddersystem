@@ -14,6 +14,7 @@ const schema = z.object({
   FB_USER_AGENT: z.string().optional().default('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36'),
   FB_ACCEPT_LANGUAGE: z.string().optional().default('en-US,en;q=0.9'),
   ASBD_ID: z.string().optional().default('129477'),
+  ENABLE_REDIS: z.coerce.boolean().optional().default(false),
 });
 
 export type Env = z.infer<typeof schema>;

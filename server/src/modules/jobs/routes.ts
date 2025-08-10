@@ -33,6 +33,7 @@ const enqueueJobSchema = z.object({
   maxConcurrent: z.number().min(1).max(50).default(10),
   retryAttempts: z.number().min(1).max(5).default(3),
   preferences: preferencesSchema,
+  preferencesByCookieId: z.record(z.string(), preferencesSchema.unwrap()).optional(),
 });
 
 export async function jobRoutes(app: any) {
@@ -62,6 +63,7 @@ export async function jobRoutes(app: any) {
           maxConcurrent: { type: 'number', minimum: 1, maximum: 50, default: 10 },
           retryAttempts: { type: 'number', minimum: 1, maximum: 5, default: 3 },
           preferences: { type: 'object' },
+          preferencesByCookieId: { type: 'object' },
         },
         required: ['cookieIds', 'cardIds']
       }
@@ -70,7 +72,6 @@ export async function jobRoutes(app: any) {
     const body = enqueueJobSchema.parse(req.body);
     const db = await getDb();
     
-    // Get cookies and cards
     const cookies = await db.collection('cookies').find({
       _id: { $in: body.cookieIds.map(id => (id as any)) }
     }).toArray();
@@ -83,29 +84,29 @@ export async function jobRoutes(app: any) {
       return { error: 'No cookies or cards found' };
     }
 
-    // Create job pairs
     const pairs = Math.min(cookies.length, cards.length);
     let enqueued = 0;
+    const prefMap = body.preferencesByCookieId || {};
     
     for (let i = 0; i < pairs; i++) {
       const cookie = cookies[i];
       const card = cards[i];
-      
       if (!cookie || !card) continue;
-      
-      // Get proxy config for this job (if available)
       const proxyConfig = body.proxyConfigs?.[i % (body.proxyConfigs?.length || 1)];
+
+      const globalPrefs = body.preferences || {};
+      const cookieIdStr = cookie._id.toString();
+      const perCookie = (prefMap as any)[cookieIdStr] || {};
+      const mergedPrefs = { ...globalPrefs, ...perCookie };
       
-      const jobData = {
-        cookieId: cookie._id.toString(),
+      await enqueueAddCardJob({ 
+        cookieId: cookieIdStr,
         cardId: card._id.toString(),
         proxyConfig,
         maxConcurrent: body.maxConcurrent,
         retryAttempts: body.retryAttempts,
-        preferences: body.preferences,
-      };
-      
-      await enqueueAddCardJob(jobData, {
+        preferences: mergedPrefs,
+      }, {
         attempts: body.retryAttempts,
         backoff: { type: 'exponential', delay: 2000 },
         removeOnComplete: 100,

@@ -6,6 +6,11 @@ let redis: any = null;
 export function getRedis(): any {
   if (redis) return redis;
 
+  if (!env.ENABLE_REDIS) {
+    console.warn('[redis] Disabled by ENABLE_REDIS=false. Using mock.');
+    return { status: 'mock' } as any;
+  }
+
   const url = env.REDIS_URL;
   if (!url) {
     console.warn('[redis] REDIS_URL not set. Using mock queue (no Redis connection).');
