@@ -23,7 +23,12 @@ app.addContentTypeParser('application/json', { parseAs: 'string' }, (req: any, b
   try { done(null, JSON.parse(body)); } catch (err) { done(err as any); }
 });
 
-app.register(cors, { origin: env.CORS_ORIGIN, credentials: true });
+app.register(cors, {
+  origin: env.CORS_ORIGIN,
+  credentials: true,
+  methods: ['GET','POST','PUT','PATCH','DELETE','OPTIONS'],
+  allowedHeaders: ['Content-Type','Authorization','Origin','Accept','X-Requested-With','x-fb-lsd','x-fb-upl-sessionid','x-bh-flowsessionid','x-asbd-id','x-fb-friendly-name'],
+});
 app.register(rateLimit, { max: 300, timeWindow: '1 minute' });
 app.register(cookie);
 
