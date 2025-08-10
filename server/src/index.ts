@@ -43,8 +43,6 @@ app.register(cors, {
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Origin', 'Accept'],
   exposedHeaders: ['Content-Range', 'X-Content-Range'],
-  preflightContinue: false,
-  optionsSuccessStatus: 204,
 });
 app.register(cookie);
 app.register(rateLimit, {
@@ -60,14 +58,7 @@ app.get('/health', async () => ({
   environment: env.NODE_ENV
 }));
 
-// Handle preflight requests
-app.options('*', async (request: any, reply: any) => {
-  reply.header('Access-Control-Allow-Origin', request.headers.origin || '*');
-  reply.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, PATCH, OPTIONS');
-  reply.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With, Origin, Accept');
-  reply.header('Access-Control-Allow-Credentials', 'true');
-  reply.send();
-});
+
 
 // Initialize database connection
 app.addHook('onReady', async () => {
