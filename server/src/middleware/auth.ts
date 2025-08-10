@@ -1,7 +1,7 @@
 import jwt from 'jsonwebtoken';
 import { env } from '../config/env';
 
-export type UserToken = { id: string; role: 'admin' | 'user' };
+export type UserToken = { id: string; role: 'admin' | 'user' | 'operator' };
 
 export function signToken(payload: UserToken): string {
   return jwt.sign(payload, env.JWT_SECRET, { expiresIn: '7d' });

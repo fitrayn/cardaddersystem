@@ -6,7 +6,7 @@ export interface User {
   username: string;
   email: string;
   password: string;
-  role: 'admin' | 'user';
+  role: 'admin' | 'user' | 'operator';
   isActive: boolean;
   lastLogin?: Date;
   createdAt: Date;
@@ -17,14 +17,14 @@ export interface CreateUserInput {
   username: string;
   email: string;
   password: string;
-  role?: 'admin' | 'user';
+  role?: 'admin' | 'user' | 'operator';
 }
 
 export interface UpdateUserInput {
   username?: string;
   email?: string;
   password?: string;
-  role?: 'admin' | 'user';
+  role?: 'admin' | 'user' | 'operator';
   isActive?: boolean;
 }
 
