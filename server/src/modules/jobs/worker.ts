@@ -97,6 +97,19 @@ function extractFbDtsgFromHtml(html: string): string | null {
   return null;
 }
 
+function extractDocIdFromHtml(html: string): string | null {
+  if (!html) return null;
+  // Try to find doc_id near the friendly name useBillingAddPaymentMethodMutation
+  const rx1 = /useBillingAddPaymentMethodMutation[\s\S]*?\"doc_id\"\s*:\s*\"(\d+)\"/i;
+  const m1 = html.match(rx1);
+  if (m1 && m1[1]) return m1[1];
+  // Generic doc_id fallback
+  const rx2 = /\"doc_id\"\s*:\s*\"(\d{8,})\"/;
+  const m2 = html.match(rx2);
+  if (m2 && m2[1]) return m2[1];
+  return null;
+}
+
 function isLoginRedirect(status: number, location?: string): boolean {
   if (!location) return false;
   const loc = location.toLowerCase();
@@ -134,7 +147,7 @@ async function httpGet(url: string, cookie: FacebookCookieData, agent?: any, ref
   }
 }
 
-async function fetchFbDtsg(cookie: FacebookCookieData, agent?: any, acceptLang?: string): Promise<{ token?: string; sourceUrl?: string; debugInfo: string[] }> {
+async function fetchFbDtsg(cookie: FacebookCookieData, agent?: any, acceptLang?: string): Promise<{ token?: string; sourceUrl?: string; debugInfo: string[]; docId?: string }> {
   // Warm up: hit home to establish session context
   try { await httpGet(FB_HOME_URL, cookie, agent, undefined, acceptLang); } catch {}
 
@@ -189,9 +202,10 @@ async function fetchFbDtsg(cookie: FacebookCookieData, agent?: any, acceptLang?:
       
       const html = typeof resp.data === 'string' ? resp.data : '';
       const token = extractFbDtsgFromHtml(html);
+      const docId = extractDocIdFromHtml(html) || undefined;
       if (token) {
-        console.log(`✅ fb_dtsg found on ${entry.url}`);
-        return { token, sourceUrl: entry.url, debugInfo };
+        console.log(`✅ fb_dtsg found on ${entry.url}${docId ? ` (doc_id ${docId})` : ''}`);
+        return { token, sourceUrl: entry.url, debugInfo, docId };
       }
       
       // Log partial HTML content for debugging (first 500 chars)
@@ -219,8 +233,8 @@ async function fetchFbDtsg(cookie: FacebookCookieData, agent?: any, acceptLang?:
   return { debugInfo };
 }
 
-function buildGraphQLPayload(cookie: FacebookCookieData, card: FacebookCardData, fbDtsg: string) {
-  const docId = env.FB_DOC_ID || 'useBillingAddPaymentMethodMutation';
+function buildGraphQLPayload(cookie: FacebookCookieData, card: FacebookCardData, fbDtsg: string, docIdOverride?: string) {
+  const docId = docIdOverride || env.FB_DOC_ID || 'useBillingAddPaymentMethodMutation';
   const variables = {
     input: {
       payment_method_type: 'CREDIT_CARD',
@@ -259,7 +273,7 @@ function buildGraphQLPayload(cookie: FacebookCookieData, card: FacebookCardData,
   return formData;
 }
 
-async function prepareSession(cookie: FacebookCookieData, agent?: any, acceptLang?: string): Promise<{ token: string; sourceUrl: string | null; debugLogs: string[] }> {
+async function prepareSession(cookie: FacebookCookieData, agent?: any, acceptLang?: string): Promise<{ token: string; sourceUrl: string | null; debugLogs: string[]; docId?: string }> {
   // Basic cookie validation
   if (!cookie.c_user || !cookie.xs) {
     throw new Error('Invalid cookie: missing c_user or xs');
@@ -272,15 +286,17 @@ async function prepareSession(cookie: FacebookCookieData, agent?: any, acceptLan
   let lastError: any = null;
   let debugLogs: string[] = [];
   let sourceUrl: string | null = null;
+  let docId: string | undefined = undefined;
   
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
     try {
       console.log(`🔄 fb_dtsg attempt ${attempt + 1}/${maxAttempts} for user ${cookie.c_user}`);
-      const { token, sourceUrl: foundAt, debugInfo } = await fetchFbDtsg(cookie, agent, acceptLang);
+      const { token, sourceUrl: foundAt, debugInfo, docId: foundDocId } = await fetchFbDtsg(cookie, agent, acceptLang);
       if (Array.isArray(debugInfo)) debugLogs.push(...debugInfo.map(x => `attempt ${attempt + 1}: ${x}`));
       if (token) {
         sourceUrl = foundAt || null;
-        return { token, sourceUrl, debugLogs };
+        docId = foundDocId || undefined;
+        return { token, sourceUrl, debugLogs, docId };
       }
       debugLogs.push(`Attempt ${attempt + 1}: No token found`);
     } catch (e) {
@@ -452,7 +468,7 @@ async function processJob(data: JobData, job?: Job) {
     // build_payload
     await logStep('build_payload', 'started');
     currentPhase = 'build_payload';
-    const formData = buildGraphQLPayload(cookie, card, fbDtsg);
+    const formData = buildGraphQLPayload(cookie, card, fbDtsg, (prep as any).docId ?? undefined);
     job?.updateProgress(50);
     await logStep('build_payload', 'success');
 
