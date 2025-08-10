@@ -1,0 +1,36 @@
+{
+  "manifest_version": 3,
+  "name": "FB Billing GraphQL Capturer",
+  "description": "Capture Facebook Business GraphQL requests (headers, body, tokens) to replicate on server.",
+  "version": "1.0.0",
+  "permissions": [
+    "storage",
+    "scripting",
+    "activeTab"
+  ],
+  "host_permissions": [
+    "https://*.facebook.com/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_title": "FB Capture",
+    "default_popup": "popup.html"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://*.facebook.com/*"
+      ],
+      "js": ["content.js"],
+      "run_at": "document_start"
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": ["injected.js"],
+      "matches": ["https://*.facebook.com/*"]
+    }
+  ]
+} 

