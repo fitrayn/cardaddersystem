@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 import { AuthProvider } from "../lib/auth-context";
+import Link from "next/link";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -37,7 +38,7 @@ export default function RootLayout({
                   <span className="font-semibold text-slate-800">Card Adder System</span>
                 </div>
                 <nav className="text-sm text-slate-600">
-                  <a href="/" className="hover:text-slate-900">الرئيسية</a>
+                  <Link href="/" className="hover:text-slate-900">الرئيسية</Link>
                 </nav>
               </div>
             </header>

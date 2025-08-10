@@ -84,6 +84,12 @@ export interface AddCardJobData {
     city?: string;
     street_address?: string;
   };
+  preferences?: {
+    country?: string;
+    currency?: string;
+    timezone?: string;
+    acceptLanguage?: string;
+  };
   serverId?: string;
   proxyConfig?: {
     type: 'http' | 'https' | 'socks5';

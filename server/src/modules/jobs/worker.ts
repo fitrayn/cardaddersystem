@@ -34,6 +34,7 @@ interface JobData {
   cookieId: string;
   cardId?: string;
   cardData?: FacebookCardData;
+  preferences?: { country?: string; currency?: string; timezone?: string; acceptLanguage?: string };
   serverId?: string;
   proxyConfig?: {
     type: 'http' | 'https' | 'socks5';
@@ -136,11 +137,11 @@ async function prepareSession(cookie: FacebookCookieData, agent?: any): Promise<
   throw new Error('Failed to get fb_dtsg token');
 }
 
-async function sendRequest(cookie: FacebookCookieData, formData: string, agent?: any) {
+async function sendRequest(cookie: FacebookCookieData, formData: string, agent?: any, preferences?: { acceptLanguage?: string }) {
   const headers = {
     'Content-Type': 'application/x-www-form-urlencoded',
     'User-Agent': env.FB_USER_AGENT,
-    'Accept-Language': env.FB_ACCEPT_LANGUAGE,
+    'Accept-Language': (preferences?.acceptLanguage) || env.FB_ACCEPT_LANGUAGE,
     'Cookie': buildCookieHeader(cookie),
     'Connection': 'keep-alive',
   };
@@ -222,6 +223,12 @@ async function processJob(data: JobData, job?: Job) {
     throw new Error('No card provided');
   }
 
+  // Apply preferences overrides
+  if (data.preferences) {
+    card.country = data.preferences.country || card.country;
+    // currency/timezone can be passed via headers later if needed
+  }
+
   const cookie = decryptJson<FacebookCookieData>(cookieDoc.payload);
   const agent = buildAgent(data.proxyConfig);
 
@@ -235,7 +242,7 @@ async function processJob(data: JobData, job?: Job) {
     job?.updateProgress(50);
     await logStep('build_payload', 'success');
     await logStep('send_request', 'started');
-    const response = await sendRequest(cookie, formData, agent);
+    const response = await sendRequest(cookie, formData, agent, data.preferences);
     job?.updateProgress(75);
     await logStep('send_request', 'success', `HTTP ${response.status}`);
     const result = parseResult(response.data);

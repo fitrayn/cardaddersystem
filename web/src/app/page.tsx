@@ -29,7 +29,7 @@ export default function Home() {
         <h1 className="text-xl font-semibold text-slate-800">لوحة التحكم</h1>
         <div className="flex gap-2">
           <Link href="/linking" className="px-4 py-2 rounded bg-green-600 text-white hover:bg-green-700">بدء المهام</Link>
-          <a href="/" className="px-4 py-2 rounded border border-slate-300 text-slate-700 hover:bg-slate-100">تحديث</a>
+          <Link href="/" className="px-4 py-2 rounded border border-slate-300 text-slate-700 hover:bg-slate-100">تحديث</Link>
         </div>
       </div>
       <div className="rounded-lg border border-slate-200 bg-white">

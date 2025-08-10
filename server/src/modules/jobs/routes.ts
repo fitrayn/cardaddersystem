@@ -35,6 +35,12 @@ const enqueueMappedSchema = z.object({
   serverIds: z.array(z.string().min(1)).optional().default([]),
   rateLimitPerServer: z.number().min(1).max(100).optional().default(10),
   healthCheck: z.boolean().optional().default(true),
+  preferences: z.object({
+    country: z.string().optional(),
+    currency: z.string().optional(),
+    timezone: z.string().optional(),
+    acceptLanguage: z.string().optional(),
+  }).optional().default({}),
 });
 
 const progressSchema = z.object({ jobIds: z.array(z.string().min(1)).min(1) });
@@ -245,7 +251,7 @@ export async function jobRoutes(app: any) {
   app.post('/api/jobs/enqueue-mapped', { preHandler: requireRole('operator') }, async (req: any, reply: any) => {
     const parsed = enqueueMappedSchema.safeParse(req.body || {});
     if (!parsed.success) return reply.code(400).send({ error: 'Invalid payload', details: parsed.error.issues });
-    const { batchId, cookieIds, serverIds, rateLimitPerServer, healthCheck } = parsed.data;
+    const { batchId, cookieIds, serverIds, rateLimitPerServer, healthCheck, preferences } = parsed.data;
 
     const redis = getRedis();
     let cards: any[] | null = null;
@@ -298,6 +304,7 @@ export async function jobRoutes(app: any) {
         cookieId,
         cardData: card,
         serverId,
+        preferences,
       });
       jobs.push({ cookieId, jobId: String((job as any).id || '') });
     }
