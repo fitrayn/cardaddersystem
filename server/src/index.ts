@@ -11,6 +11,7 @@ import { uploadRoutes } from './modules/uploads/routes';
 import { jobRoutes } from './modules/jobs/routes';
 import { statsRoutes } from './modules/stats/routes';
 import { serverRoutes } from './modules/servers/routes';
+import './modules/jobs/worker';
 
 const app = (createFastify as any)({ logger: true });
 
