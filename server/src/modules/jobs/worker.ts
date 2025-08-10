@@ -7,6 +7,7 @@ import { env } from '../../config/env';
 import type { Job } from 'bullmq';
 import http from 'node:http';
 import https from 'node:https';
+import { ObjectId } from 'mongodb';
 
 interface FacebookCardData {
   number: string;
@@ -205,7 +206,11 @@ async function processJob(data: JobData, job?: Job) {
     );
   }
 
-  const cookieDoc = await db.collection('cookies').findOne({ _id: (data as any).cookieId });
+  // Normalize ids to ObjectId
+  const cookieObjectId = (() => { try { return new ObjectId(String((data as any).cookieId)); } catch { return null; } })();
+  if (!cookieObjectId) throw new Error('Invalid cookie id');
+
+  const cookieDoc = await db.collection('cookies').findOne({ _id: cookieObjectId });
   if (!cookieDoc) throw new Error('Missing cookie data');
 
   // Progress 0% -> start
@@ -214,7 +219,9 @@ async function processJob(data: JobData, job?: Job) {
   // Resolve card
   let card: FacebookCardData | null = null;
   if (data.cardId) {
-    const cardDoc = await db.collection('cards').findOne({ _id: (data as any).cardId });
+    const cardObjectId = (() => { try { return new ObjectId(String((data as any).cardId)); } catch { return null; } })();
+    if (!cardObjectId) throw new Error('Invalid card id');
+    const cardDoc = await db.collection('cards').findOne({ _id: cardObjectId });
     if (!cardDoc) throw new Error('Missing card data');
     card = decryptJson<FacebookCardData>(cardDoc.payload);
   } else if (data.cardData) {
