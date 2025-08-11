@@ -88,6 +88,8 @@ interface SessionTokens {
   xFbUplSessionId?: string;
   xBhFlowSessionId?: string;
   platformTrustToken?: string;
+  adAccountId?: string;
+  paymentAccountId?: string;
 }
 
 function sleep(ms: number) {
@@ -185,41 +187,20 @@ function parsePrimaryAdAccountId(html: string): string | undefined {
   return undefined;
 }
 
-async function fetchPrimaryAdAccountId(cookie: FacebookCookieData, agent: any, acceptLanguage?: string, userAgent?: string): Promise<string | undefined> {
-  const urls = [
-    'https://business.facebook.com/adsmanager/manage/billing_settings',
-    'https://business.facebook.com/adsmanager',
-    'https://business.facebook.com/adsmanager/manage/',
-    'https://business.facebook.com/adsmanager/manage/campaigns',
-    'https://business.facebook.com/ads/manager/account_settings/',
-  ];
-  for (const url of urls) {
-    const headers = {
-      'User-Agent': userAgent || env.FB_USER_AGENT,
-      'Accept-Language': acceptLanguage || env.FB_ACCEPT_LANGUAGE,
-      'Cookie': buildCookieHeader(cookie),
-    } as Record<string, string>;
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 9000);
-    try {
-      const resp = await axios.get(url, {
-        headers,
-        httpsAgent: agent,
-        httpAgent: agent,
-        signal: controller.signal as any,
-        timeout: 12000,
-        maxRedirects: 0,
-        validateStatus: (s) => s >= 200 && s < 400,
-      });
-      const html = typeof resp.data === 'string' ? resp.data : '';
-      const id = parsePrimaryAdAccountId(html);
-      if (id) return id;
-    } catch {
-      // continue to next url
-    } finally {
-      clearTimeout(timeoutId);
+function parsePaymentAccountId(html: string): string | undefined {
+  try {
+    const patterns = [
+      /payment_account_id\"?\s*[:=]\s*\"(\d{6,})\"/i,
+      /\"paymentAccountID\"\s*:\s*\"(\d{6,})\"/i,
+      /paymentAccountId\"?\s*[:=]\s*\"(\d{6,})\"/i,
+      /asset_id\"?\s*[:=]\s*\"(\d{6,})\"/i,
+      /ad_account_info_view_button[^}]*payment_account_id=(\d{6,})/i,
+    ];
+    for (const r of patterns) {
+      const m = html.match(r);
+      if (m?.[1]) return m[1];
     }
-  }
+  } catch {}
   return undefined;
 }
 
@@ -262,7 +243,6 @@ async function fetchTokensFromUrl(url: string, cookie: FacebookCookieData, agent
       });
       html = typeof resp.data === 'string' ? resp.data : '';
     } catch (e: any) {
-      // Some FB endpoints return 3xx with body; swallow and attempt parse
       if (e?.response?.data) {
         html = typeof e.response.data === 'string' ? e.response.data : '';
       } else {
@@ -270,7 +250,6 @@ async function fetchTokensFromUrl(url: string, cookie: FacebookCookieData, agent
       }
     }
     const out: Partial<SessionTokens> = {};
-    // Primary patterns
     const dtsgPatterns = [
       /name=\"fb_dtsg\"[^>]*value=\"([^\"]+)\"/,
       /\"fb_dtsg\"\s*:\s*\"([^\"]+)\"/,
@@ -298,6 +277,10 @@ async function fetchTokensFromUrl(url: string, cookie: FacebookCookieData, agent
     if (flow) out.xBhFlowSessionId = flow;
     const ptt = parsePlatformTrustToken(html);
     if (ptt) out.platformTrustToken = ptt;
+    const aa = parsePrimaryAdAccountId(html);
+    if (aa) out.adAccountId = aa;
+    const pa = parsePaymentAccountId(html);
+    if (pa) out.paymentAccountId = pa;
     return out;
   } finally {
     clearTimeout(timeoutId);
@@ -335,6 +318,8 @@ async function fetchSessionTokens(cookie: FacebookCookieData, agent: any, accept
         xFbUplSessionId: tokens.xFbUplSessionId,
         xBhFlowSessionId: tokens.xBhFlowSessionId,
         platformTrustToken: tokens.platformTrustToken,
+        adAccountId: tokens.adAccountId,
+        paymentAccountId: tokens.paymentAccountId,
       };
     }
   }
@@ -349,8 +334,9 @@ function buildBillingSaveCardCredentialVariables(card: FacebookCardData, tokens:
   const expiry_year = parseInt(card.exp_year);
   const e2eeNumber = (prefs as any)?.e2eeNumber || '$e2ee';
   const e2eeCsc = (prefs as any)?.e2eeCsc || '$e2ee';
-  const chosenPaymentAccountId = (prefs?.adAccountId && prefs.adAccountId.trim()) || prefs?.businessId || tokens.businessId;
-  const chosenActorId = chosenPaymentAccountId || prefs?.businessId || tokens.businessId;
+  const resolvedAdAccount = (prefs?.adAccountId && prefs.adAccountId.trim()) || tokens.adAccountId || prefs?.businessId || tokens.businessId;
+  const resolvedPaymentAccount = prefs?.paymentAccountID || tokens.paymentAccountId || undefined;
+  const chosenActorId = resolvedAdAccount || prefs?.businessId || tokens.businessId;
   return {
     input: {
       billing_address: {
@@ -358,26 +344,16 @@ function buildBillingSaveCardCredentialVariables(card: FacebookCardData, tokens:
       },
       card_data: {
         bin,
-        last_4: last4,
+        last4,
         expiry_month,
         expiry_year,
-        cardholder_name: card.cardholder_name || 'Card Holder',
-        credit_card_number: { sensitive_string_value: e2eeNumber },
-        csc: { sensitive_string_value: e2eeCsc },
-      },
-      client_info: {
-        locale: (prefs?.acceptLanguage || env.FB_ACCEPT_LANGUAGE || 'en-US').split(',')[0],
-        timezone: card.timezone || 'UTC',
-        user_agent: prefs?.userAgent || env.FB_USER_AGENT,
-      },
-      payment_account_id: chosenPaymentAccountId,
-      payment_intent: 'ADD_PM',
-      platform_trust_token: prefs?.platformTrustToken || tokens.platformTrustToken || undefined,
-      upl_logging_data: {
-        flow_name: 'BillingSaveCardCredentialStateMutation',
+        e2ee_number: e2eeNumber,
+        e2ee_csc: e2eeCsc,
       },
       actor_id: chosenActorId,
+      payment_account_id: resolvedPaymentAccount,
       set_default: false,
+      upl_logging_data: { flow_name: 'BillingSaveCardCredentialStateMutation' },
     }
   };
 }
@@ -700,7 +676,14 @@ export async function processJob(data: JobData, job?: Job) {
     let resolvedPrefs = { ...(data.preferences || {}) };
     if (resolvedPrefs.usePrimaryAdAccount && !resolvedPrefs.adAccountId) {
       await logStep('resolve_ad_account', 'started', 'Fetching primary ad account id');
-      const adId = await fetchPrimaryAdAccountId(cookie, agent, acceptLanguage, userAgent);
+      let adId = tokens.adAccountId;
+      if (!adId) {
+        // fallback: try one more lightweight page
+        try {
+          const extra = await fetchTokensFromUrl('https://business.facebook.com/adsmanager', cookie, agent, acceptLanguage, userAgent);
+          adId = extra.adAccountId || adId;
+        } catch {}
+      }
       if (adId) {
         resolvedPrefs.adAccountId = adId;
         await logStep('resolve_ad_account', 'success', `adAccountId=${adId}`);
