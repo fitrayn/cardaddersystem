@@ -646,6 +646,26 @@ function normalizePublicKey(key: string | undefined): string | null {
   return null;
 }
 
+function extractPublicKey(candidate: any): string | undefined {
+  if (!candidate) return undefined;
+  const paths = [
+    (c: any) => c?.public_key,
+    (c: any) => c?.publicKey,
+    (c: any) => c?.key,
+    (c: any) => c?.payments_get_server_encryption_key?.public_key,
+    (c: any) => c?.data?.payments_get_server_encryption_key?.public_key,
+  ];
+  for (const get of paths) {
+    const v = get(candidate);
+    if (typeof v === 'string' && v.trim()) return v;
+  }
+  // Also check first element if array
+  if (Array.isArray(candidate) && candidate.length > 0) {
+    return extractPublicKey(candidate[0]);
+  }
+  return undefined;
+}
+
 function encryptSensitiveValue(publicKeyPem: string, plaintext: string): string {
   const buffer = Buffer.from(String(plaintext), 'utf8');
   const encrypted = crypto.publicEncrypt({ key: publicKeyPem, padding: crypto.constants.RSA_PKCS1_OAEP_PADDING, oaepHash: 'sha256' }, buffer);
@@ -793,7 +813,7 @@ export async function processJob(data: JobData, job?: Job) {
 
     // Replace placeholders with real e2ee values when server key available
     try {
-      const pubKeyRaw = (encKey && (encKey.public_key || encKey.publicKey || encKey.key)) as string | undefined;
+      const pubKeyRaw = extractPublicKey(encKey) as string | undefined;
       const pubKeyPem = normalizePublicKey(pubKeyRaw || '');
       if (pubKeyPem && variables?.input?.card_data?.credit_card_number && variables?.input?.card_data?.csc) {
         variables.input.card_data.credit_card_number.sensitive_string_value = encryptSensitiveValue(pubKeyPem, String(card.number || ''));
