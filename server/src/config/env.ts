@@ -21,6 +21,9 @@ const schema = z.object({
   FB_UPDATE_ACCOUNT_DOC_ID: z.string().optional(),
   // New: enforce E2EE availability; if true and public key missing, fail early
   ENFORCE_E2EE: z.coerce.boolean().optional().default(false),
+  // New: allow overriding encryption key doc id and enabling debug logging
+  FB_ENC_KEY_DOC_ID: z.string().optional(),
+  DEBUG_E2EE: z.coerce.boolean().optional().default(false),
 });
 
 export type Env = z.infer<typeof schema>;

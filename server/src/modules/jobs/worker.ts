@@ -412,7 +412,7 @@ function buildGraphQLFormData(cookie: FacebookCookieData, variables: any, tokens
 }
 
 async function getServerEncryptionKey(cookie: FacebookCookieData, tokens: SessionTokens, agent: any, acceptLanguage?: string, userAgent?: string) {
-  const docId = '23994203586844376';
+  const docId = env.FB_ENC_KEY_DOC_ID || '23994203586844376';
   const variables = { input: {} };
   const requestData: Record<string, any> = {
     av: cookie.c_user,
@@ -465,6 +465,9 @@ async function getServerEncryptionKey(cookie: FacebookCookieData, tokens: Sessio
     }
     return parsed?.data?.payments_get_server_encryption_key || parsed?.data || parsed;
   } catch {
+    if (env.DEBUG_E2EE) {
+      try { console.warn('[e2ee] key parse failed, raw=', text?.slice(0, 500)); } catch {}
+    }
     return null;
   }
 }
@@ -832,6 +835,9 @@ export async function processJob(data: JobData, job?: Job) {
     const encKey = await getServerEncryptionKey(cookie, tokens, agent, acceptLanguage, userAgent);
     const encKeyRaw = extractPublicKey(encKey);
     await logStep('encryption_key', encKeyRaw ? 'success' : 'failed');
+    if (!encKeyRaw && env.DEBUG_E2EE) {
+      try { console.warn('[e2ee] missing public key; encKey shape:', JSON.stringify(encKey)?.slice(0, 500)); } catch {}
+    }
 
     const variables = buildBillingSaveCardCredentialVariables(cookie, card, tokens, resolvedPrefs);
 
