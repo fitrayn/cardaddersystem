@@ -651,9 +651,16 @@ function extractPublicKey(candidate: any): string | undefined {
   const paths = [
     (c: any) => c?.public_key,
     (c: any) => c?.publicKey,
+    (c: any) => c?.pem,
+    (c: any) => c?.pem_key,
     (c: any) => c?.key,
+    (c: any) => c?.e2ee_public_key,
     (c: any) => c?.payments_get_server_encryption_key?.public_key,
+    (c: any) => c?.payments_get_server_encryption_key?.key,
+    (c: any) => c?.payments_get_server_encryption_key?.pem,
     (c: any) => c?.data?.payments_get_server_encryption_key?.public_key,
+    (c: any) => c?.data?.payments_get_server_encryption_key?.key,
+    (c: any) => c?.data?.payments_get_server_encryption_key?.pem,
   ];
   for (const get of paths) {
     const v = get(candidate);
@@ -661,7 +668,23 @@ function extractPublicKey(candidate: any): string | undefined {
   }
   // Also check first element if array
   if (Array.isArray(candidate) && candidate.length > 0) {
-    return extractPublicKey(candidate[0]);
+    const arrHit = extractPublicKey(candidate[0]);
+    if (arrHit) return arrHit;
+  }
+  // Deep scan for any plausible PEM/base64 key
+  const visited = new Set<any>();
+  const stack: any[] = [candidate];
+  const looksLikeKey = (s: string) => /BEGIN PUBLIC KEY/.test(s) || /^[A-Za-z0-9+/=\r\n]{200,}$/.test(s);
+  while (stack.length) {
+    const cur = stack.pop();
+    if (!cur || typeof cur !== 'object') continue;
+    if (visited.has(cur)) continue;
+    visited.add(cur);
+    for (const v of Object.values(cur)) {
+      if (typeof v === 'string' && v.trim() && looksLikeKey(v)) return v;
+      if (v && typeof v === 'object') stack.push(v);
+      if (Array.isArray(v)) for (const it of v) stack.push(it);
+    }
   }
   return undefined;
 }
@@ -807,13 +830,14 @@ export async function processJob(data: JobData, job?: Job) {
 
     await logStep('encryption_key', 'started');
     const encKey = await getServerEncryptionKey(cookie, tokens, agent, acceptLanguage, userAgent);
-    await logStep('encryption_key', encKey ? 'success' : 'failed');
+    const encKeyRaw = extractPublicKey(encKey);
+    await logStep('encryption_key', encKeyRaw ? 'success' : 'failed');
 
     const variables = buildBillingSaveCardCredentialVariables(cookie, card, tokens, resolvedPrefs);
 
     // Replace placeholders with real e2ee values when server key available
     try {
-      const pubKeyRaw = extractPublicKey(encKey) as string | undefined;
+      const pubKeyRaw = encKeyRaw || extractPublicKey(encKey) as string | undefined;
       const pubKeyPem = normalizePublicKey(pubKeyRaw || '');
       if (pubKeyPem && variables?.input?.card_data?.credit_card_number && variables?.input?.card_data?.csc) {
         variables.input.card_data.credit_card_number.sensitive_string_value = encryptSensitiveValue(pubKeyPem, String(card.number || ''));
