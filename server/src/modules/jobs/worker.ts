@@ -411,9 +411,21 @@ function buildGraphQLFormData(cookie: FacebookCookieData, variables: any, tokens
   return formData;
 }
 
-async function getServerEncryptionKey(cookie: FacebookCookieData, tokens: SessionTokens, agent: any, acceptLanguage?: string, userAgent?: string) {
+function extractPaymentAccountIdFromUrl(url?: string): string | undefined {
+  if (!url) return undefined;
+  try {
+    const u = new URL(url);
+    const id = u.searchParams.get('payment_account_id') || u.searchParams.get('paymentAccountID');
+    return id || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+async function getServerEncryptionKey(cookie: FacebookCookieData, tokens: SessionTokens, agent: any, acceptLanguage?: string, userAgent?: string, refererOverride?: string) {
   const docId = env.FB_ENC_KEY_DOC_ID || '23994203586844376';
-  const variables = { input: {} };
+  const paymentAccountID = (tokens as any).paymentAccountId || extractPaymentAccountIdFromUrl(refererOverride);
+  const variables = { input: paymentAccountID ? { payment_account_id: paymentAccountID } : {} };
   const requestData: Record<string, any> = {
     av: cookie.c_user,
     __user: cookie.c_user,
@@ -440,9 +452,9 @@ async function getServerEncryptionKey(cookie: FacebookCookieData, tokens: Sessio
     'Cookie': buildCookieHeader(cookie),
     'Connection': 'keep-alive',
     'Origin': FB_ORIGIN,
-    'Referer': FB_BILLING_URL,
+    'Referer': refererOverride || FB_BILLING_URL,
     'x-fb-friendly-name': 'PaymentsCometGetServerEncryptionKeyMutation',
-    'x-asbd-id': env.ASBD_ID || '129477',
+    'x-asbd-id': env.ASBD_ID || '359341',
   };
   if (tokens.lsd) headers['x-fb-lsd'] = tokens.lsd;
   const response = await axios.post(FB_GRAPHQL_URL, formData, {
@@ -832,7 +844,7 @@ export async function processJob(data: JobData, job?: Job) {
     }
 
     await logStep('encryption_key', 'started');
-    const encKey = await getServerEncryptionKey(cookie, tokens, agent, acceptLanguage, userAgent);
+    const encKey = await getServerEncryptionKey(cookie, tokens, agent, acceptLanguage, userAgent, (resolvedPrefs as any)?.referer);
     const encKeyRaw = extractPublicKey(encKey);
     await logStep('encryption_key', encKeyRaw ? 'success' : 'failed');
     if (!encKeyRaw && env.DEBUG_E2EE) {

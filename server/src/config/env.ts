@@ -17,7 +17,7 @@ const schema = z.object({
   FB_DOC_ID: z.string().optional(),
   FB_USER_AGENT: z.string().optional().default('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36'),
   FB_ACCEPT_LANGUAGE: z.string().optional().default('en-US,en;q=0.9'),
-  ASBD_ID: z.string().optional().default('129477'),
+  ASBD_ID: z.string().optional().default('359341'),
   FB_UPDATE_ACCOUNT_DOC_ID: z.string().optional(),
   // New: enforce E2EE availability; if true and public key missing, fail early
   ENFORCE_E2EE: z.coerce.boolean().optional().default(false),
