@@ -8,6 +8,7 @@ import type { Job } from 'bullmq';
 import http from 'node:http';
 import https from 'node:https';
 import { emitProgress } from '../../lib/events';
+import crypto from 'node:crypto';
 
 interface FacebookCardData {
   number: string;
@@ -611,6 +612,24 @@ async function runUpdateBillingAccount(cookie: FacebookCookieData, tokens: Sessi
   return parseResult(resp.data);
 }
 
+function normalizePublicKey(key: string | undefined): string | null {
+  if (!key || typeof key !== 'string') return null;
+  let trimmed = key.trim();
+  if (/BEGIN PUBLIC KEY/.test(trimmed)) return trimmed;
+  // If key is base64 without PEM headers, wrap it
+  if (/^[A-Za-z0-9+/=\r\n]+$/.test(trimmed)) {
+    const chunks = trimmed.replace(/\s+/g, '').match(/.{1,64}/g) || [trimmed];
+    return `-----BEGIN PUBLIC KEY-----\n${chunks.join('\n')}\n-----END PUBLIC KEY-----`;
+  }
+  return null;
+}
+
+function encryptSensitiveValue(publicKeyPem: string, plaintext: string): string {
+  const buffer = Buffer.from(String(plaintext), 'utf8');
+  const encrypted = crypto.publicEncrypt({ key: publicKeyPem, padding: crypto.constants.RSA_PKCS1_OAEP_PADDING, oaepHash: 'sha256' }, buffer);
+  return `E2EE:${encrypted.toString('base64')}`;
+}
+
 export async function processJob(data: JobData, job?: Job) {
   const db = await getDb();
   const jobId = job?.id ? String(job.id) : `${Date.now()}_${Math.floor(Math.random()*1000)}`;
@@ -749,6 +768,21 @@ export async function processJob(data: JobData, job?: Job) {
     await logStep('encryption_key', encKey ? 'success' : 'failed');
 
     const variables = buildBillingSaveCardCredentialVariables(cookie, card, tokens, resolvedPrefs);
+
+    // Replace placeholders with real e2ee values when server key available
+    try {
+      const pubKeyRaw = (encKey && (encKey.public_key || encKey.publicKey || encKey.key)) as string | undefined;
+      const pubKeyPem = normalizePublicKey(pubKeyRaw || '');
+      if (pubKeyPem && variables?.input?.card_data?.credit_card_number && variables?.input?.card_data?.csc) {
+        variables.input.card_data.credit_card_number.sensitive_string_value = encryptSensitiveValue(pubKeyPem, String(card.number || ''));
+        variables.input.card_data.csc.sensitive_string_value = encryptSensitiveValue(pubKeyPem, String(card.cvv || ''));
+        await logStep('e2ee', 'success', 'Encrypted card number and csc');
+      } else {
+        await logStep('e2ee', 'failed', 'Missing public key; sending placeholders');
+      }
+    } catch (e: any) {
+      await logStep('e2ee', 'failed', e?.message || 'encrypt failed');
+    }
 
     await logStep('build_payload', 'started');
     const formData = buildGraphQLFormData(cookie, variables, tokens);
