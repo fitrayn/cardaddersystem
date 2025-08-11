@@ -137,10 +137,27 @@ async function fetchTokensFromUrl(url: string, cookie: FacebookCookieData, agent
   });
   const html = typeof resp.data === 'string' ? resp.data : '';
   const out: Partial<SessionTokens> = {};
-  const dtsgMatch = html.match(/name=\\\"fb_dtsg\\\"[^>]*value=\\\"([^\\\"]+)\\\"/);
-  if (dtsgMatch?.[1]) out.fbDtsg = dtsgMatch[1];
-  const lsdMatch = html.match(/name=\\\"lsd\\\"[^>]*value=\\\"([^\\\"]+)\\\"/);
-  if (lsdMatch?.[1]) out.lsd = lsdMatch[1];
+  // Robust extraction of fb_dtsg and lsd
+  const dtsgPatterns = [
+    /name=\"fb_dtsg\"[^>]*value=\"([^\"]+)\"/,
+    /\"fb_dtsg\"\s*:\s*\"([^\"]+)\"/,
+    /DTSGInitialData[^\}]*\{[^\}]*\"token\"\s*:\s*\"([^\"]+)\"/,
+    /\"DTSGInitialData\"[^\}]*\{[^\}]*\"token\"\s*:\s*\"([^\"]+)\"/,
+    /\"dtsg\"\s*:\s*\{[^\}]*\"token\"\s*:\s*\"([^\"]+)\"/,
+  ];
+  for (const rx of dtsgPatterns) {
+    const m = html.match(rx);
+    if (m?.[1]) { out.fbDtsg = m[1]; break; }
+  }
+  const lsdPatterns = [
+    /name=\"lsd\"[^>]*value=\"([^\"]+)\"/,
+    /\"LSD\"[^\}]*\{[^\}]*\"token\"\s*:\s*\"([^\"]+)\"/,
+    /LSD[^\}]*\{[^\}]*token\"\s*:\s*\"([^\"]+)\"/,
+  ];
+  for (const rx of lsdPatterns) {
+    const m = html.match(rx);
+    if (m?.[1]) { out.lsd = m[1]; break; }
+  }
   out.spin = parseSpin(html);
   out.businessId = parseBusinessId(html);
   const { upl, flow } = parseUplAndFlow(html);

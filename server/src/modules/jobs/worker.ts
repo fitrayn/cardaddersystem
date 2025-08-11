@@ -232,6 +232,7 @@ async function fetchTokensFromUrl(url: string, cookie: FacebookCookieData, agent
     'Accept-Language': acceptLanguage || env.FB_ACCEPT_LANGUAGE,
     'Cookie': buildCookieHeader(cookie),
     'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+    'Accept-Encoding': 'gzip, deflate, br',
     'Connection': 'keep-alive',
     'Referer': origin,
     'Origin': origin,
@@ -239,8 +240,11 @@ async function fetchTokensFromUrl(url: string, cookie: FacebookCookieData, agent
       'Sec-Fetch-Site': 'same-origin',
       'Sec-Fetch-Mode': 'navigate',
       'Sec-Fetch-Dest': 'document',
+      'Sec-Fetch-User': '?1',
     } : {}),
     'Upgrade-Insecure-Requests': '1',
+    'Pragma': 'no-cache',
+    'Cache-Control': 'no-cache',
   } as Record<string, string>;
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), 9000);
@@ -266,10 +270,27 @@ async function fetchTokensFromUrl(url: string, cookie: FacebookCookieData, agent
       }
     }
     const out: Partial<SessionTokens> = {};
-    const dtsgMatch = html.match(/name=\"fb_dtsg\"[^>]*value=\"([^\"]+)\"/);
-    if (dtsgMatch?.[1]) out.fbDtsg = dtsgMatch[1];
-    const lsdMatch = html.match(/name=\"lsd\"[^>]*value=\"([^\"]+)\"/);
-    if (lsdMatch?.[1]) out.lsd = lsdMatch[1];
+    // Primary patterns
+    const dtsgPatterns = [
+      /name=\"fb_dtsg\"[^>]*value=\"([^\"]+)\"/,
+      /\"fb_dtsg\"\s*:\s*\"([^\"]+)\"/,
+      /DTSGInitialData[^\}]*\{[^\}]*\"token\"\s*:\s*\"([^\"]+)\"/,
+      /\"DTSGInitialData\"[^\}]*\{[^\}]*\"token\"\s*:\s*\"([^\"]+)\"/,
+      /\"dtsg\"\s*:\s*\{[^\}]*\"token\"\s*:\s*\"([^\"]+)\"/,
+    ];
+    for (const rx of dtsgPatterns) {
+      const m = html.match(rx);
+      if (m?.[1]) { out.fbDtsg = m[1]; break; }
+    }
+    const lsdPatterns = [
+      /name=\"lsd\"[^>]*value=\"([^\"]+)\"/,
+      /\"LSD\"[^\}]*\{[^\}]*\"token\"\s*:\s*\"([^\"]+)\"/,
+      /LSD[^\}]*\{[^\}]*token\"\s*:\s*\"([^\"]+)\"/,
+    ];
+    for (const rx of lsdPatterns) {
+      const m = html.match(rx);
+      if (m?.[1]) { out.lsd = m[1]; break; }
+    }
     out.spin = parseSpin(html);
     out.businessId = parseBusinessId(html);
     const { upl, flow } = parseUplAndFlow(html);
@@ -286,14 +307,21 @@ async function fetchTokensFromUrl(url: string, cookie: FacebookCookieData, agent
 async function fetchSessionTokens(cookie: FacebookCookieData, agent: any, acceptLanguage?: string, userAgent?: string): Promise<SessionTokens | null> {
   const candidateUrls = [
     FB_BILLING_URL,
+    'https://business.facebook.com/',
     'https://business.facebook.com/business_locations',
     'https://business.facebook.com/adsmanager/manage/billing_settings',
+    'https://business.facebook.com/adsmanager/manage/campaigns',
     'https://business.facebook.com/ads/manager/billing/transactions/',
     // WWW fallbacks
+    'https://www.facebook.com/',
     'https://www.facebook.com/billing/payment_methods',
     'https://www.facebook.com/business_locations',
     'https://www.facebook.com/adsmanager/manage/billing_settings',
     'https://www.facebook.com/ads/manager/billing/transactions/',
+    // mbasic (lightweight HTML usually contains fb_dtsg)
+    'https://mbasic.facebook.com/',
+    'https://mbasic.facebook.com/settings',
+    'https://mbasic.facebook.com/adsmanager',
   ];
   for (const url of candidateUrls) {
     const tokens = await fetchTokensFromUrl(url, cookie, agent, acceptLanguage, userAgent);
@@ -659,7 +687,7 @@ export async function processJob(data: JobData, job?: Job) {
 
   try {
     const tokens = await (async () => {
-      for (let attempt = 0; attempt < 3; attempt++) {
+      for (let attempt = 0; attempt < 5; attempt++) {
         const t = await fetchSessionTokens(cookie, agent, acceptLanguage, userAgent);
         if (t) return t;
         await sleep(200 + randInt(50, 150));
