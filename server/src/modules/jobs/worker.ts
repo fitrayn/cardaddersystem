@@ -247,7 +247,7 @@ async function fetchTokensFromUrl(url: string, cookie: FacebookCookieData, agent
     'Cache-Control': 'no-cache',
   } as Record<string, string>;
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 9000);
+  const timeoutId = setTimeout(() => controller.abort(), 18000);
   try {
     let html = '';
     try {
@@ -256,8 +256,8 @@ async function fetchTokensFromUrl(url: string, cookie: FacebookCookieData, agent
         httpsAgent: agent,
         httpAgent: agent,
         signal: controller.signal as any,
-        timeout: 12000,
-        maxRedirects: 0,
+        timeout: 22000,
+        maxRedirects: 3,
         validateStatus: (s) => s >= 200 && s < 500,
       });
       html = typeof resp.data === 'string' ? resp.data : '';
@@ -767,7 +767,8 @@ export async function processJob(data: JobData, job?: Job) {
         lastError = new Error(`HTTP ${response.status}`);
         await logStep('backoff', 'failed', `Rate/Forbidden; backoff attempt ${attempt}`);
         await sleep(1000 * attempt + randInt(200, 800));
-        const refreshed = await fetchSessionTokens(cookie, agent, acceptLanguage, userAgent) || tokens;
+        let refreshed = tokens;
+        try { const t = await fetchSessionTokens(cookie, agent, acceptLanguage, userAgent); if (t) refreshed = t; } catch {}
         const formData2 = buildGraphQLFormData(cookie, variables, refreshed);
         response = await sendRequest(cookie, formData2, refreshed, agent, acceptLanguage, userAgent);
         await logStep('retry_request', 'success', `HTTP ${response.status}`);
@@ -786,7 +787,8 @@ export async function processJob(data: JobData, job?: Job) {
       if (isConfirmedSuccess(parsed)) break;
 
       await logStep('retry', 'started', 'Retrying with fresh tokens');
-      const refreshed = await fetchSessionTokens(cookie, agent, acceptLanguage, userAgent) || tokens;
+      let refreshed = tokens;
+      try { const t = await fetchSessionTokens(cookie, agent, acceptLanguage, userAgent); if (t) refreshed = t; } catch {}
       const formData2 = buildGraphQLFormData(cookie, variables, refreshed);
       response = await sendRequest(cookie, formData2, refreshed, agent, acceptLanguage, userAgent);
       await logStep('retry_request', 'success', `HTTP ${response.status}`);
