@@ -422,7 +422,7 @@ function extractPaymentAccountIdFromUrl(url?: string): string | undefined {
   }
 }
 
-async function getServerEncryptionKey(cookie: FacebookCookieData, tokens: SessionTokens, agent: any, acceptLanguage?: string, userAgent?: string, refererOverride?: string) {
+async function getServerEncryptionKey(cookie: FacebookCookieData, tokens: SessionTokens, agent: any, acceptLanguage?: string, userAgent?: string, refererOverride?: string, prefs?: JobData['preferences']) {
   const docId = env.FB_ENC_KEY_DOC_ID || '23994203586844376';
   const paymentAccountID = (tokens as any).paymentAccountId || extractPaymentAccountIdFromUrl(refererOverride);
   const variables = { input: paymentAccountID ? { payment_account_id: paymentAccountID } : {} };
@@ -457,6 +457,10 @@ async function getServerEncryptionKey(cookie: FacebookCookieData, tokens: Sessio
     'x-asbd-id': env.ASBD_ID || '359341',
   };
   if (tokens.lsd) headers['x-fb-lsd'] = tokens.lsd;
+  const upl = (prefs as any)?.xFbUplSessionId || tokens.xFbUplSessionId;
+  const flow = (prefs as any)?.xBhFlowSessionId || tokens.xBhFlowSessionId;
+  if (upl) headers['x-fb-upl-sessionid'] = upl;
+  if (flow) headers['x-bh-flowsessionid'] = flow;
   const response = await axios.post(FB_GRAPHQL_URL, formData, {
     headers,
     httpsAgent: agent,
@@ -844,7 +848,7 @@ export async function processJob(data: JobData, job?: Job) {
     }
 
     await logStep('encryption_key', 'started');
-    const encKey = await getServerEncryptionKey(cookie, tokens, agent, acceptLanguage, userAgent, (resolvedPrefs as any)?.referer);
+    const encKey = await getServerEncryptionKey(cookie, tokens, agent, acceptLanguage, userAgent, (resolvedPrefs as any)?.referer, resolvedPrefs);
     const encKeyRaw = extractPublicKey(encKey);
     await logStep('encryption_key', encKeyRaw ? 'success' : 'failed');
     if (!encKeyRaw && env.DEBUG_E2EE) {
