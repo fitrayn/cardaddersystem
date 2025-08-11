@@ -456,6 +456,13 @@ async function getServerEncryptionKey(cookie: FacebookCookieData, tokens: Sessio
   const text = typeof response.data === 'string' ? response.data.replace(/^for \(;;\);/, '') : JSON.stringify(response.data);
   try {
     const parsed = JSON.parse(text);
+    if (Array.isArray(parsed)) {
+      for (const item of parsed) {
+        const keyObj = item?.data?.payments_get_server_encryption_key || item?.data?.public_key || item?.data;
+        if (keyObj) return keyObj;
+      }
+      return parsed[0]?.data || parsed[0] || null;
+    }
     return parsed?.data?.payments_get_server_encryption_key || parsed?.data || parsed;
   } catch {
     return null;
@@ -512,6 +519,11 @@ function parseResult(data: any) {
   const text = typeof data === 'string' ? data.replace(/^for \(;;\);/, '') : JSON.stringify(data);
   try {
     const parsed = JSON.parse(text);
+    if (Array.isArray(parsed)) {
+      const errItem = parsed.find((it: any) => it?.errors && it.errors.length > 0);
+      if (errItem) throw new Error(`Facebook error: ${errItem.errors[0]?.message || 'Unknown'}`);
+      return parsed;
+    }
     if (parsed.errors && parsed.errors.length > 0) {
       throw new Error(`Facebook error: ${parsed.errors[0]?.message || 'Unknown'}`);
     }
@@ -522,9 +534,19 @@ function parseResult(data: any) {
 }
 
 function isConfirmedSuccess(parsed: any): boolean {
-  if (!parsed || typeof parsed !== 'object') return false;
-  if (parsed.data && Object.keys(parsed.data).length > 0) return true;
-  if (parsed.success === true) return true;
+  if (!parsed) return false;
+  const items = Array.isArray(parsed) ? parsed : [parsed];
+  for (const p of items) {
+    if (p && typeof p === 'object') {
+      if (p.data && Object.keys(p.data || {}).length > 0) return true;
+      if ((p as any).success === true) return true;
+      const dataObj = (p as any).data || {};
+      if (typeof dataObj === 'object') {
+        const hasClientMutationId = JSON.stringify(dataObj).includes('client_mutation_id');
+        if (hasClientMutationId) return true;
+      }
+    }
+  }
   return false;
 }
 
@@ -779,9 +801,15 @@ export async function processJob(data: JobData, job?: Job) {
         await logStep('e2ee', 'success', 'Encrypted card number and csc');
       } else {
         await logStep('e2ee', 'failed', 'Missing public key; sending placeholders');
+        if (env.ENFORCE_E2EE) {
+          throw new Error('MISSING_PUBLIC_KEY: E2EE public key not available');
+        }
       }
     } catch (e: any) {
       await logStep('e2ee', 'failed', e?.message || 'encrypt failed');
+      if (env.ENFORCE_E2EE) {
+        throw new Error('MISSING_PUBLIC_KEY: E2EE encryption failed');
+      }
     }
 
     await logStep('build_payload', 'started');
@@ -810,7 +838,9 @@ export async function processJob(data: JobData, job?: Job) {
       if (response.status === 429 || response.status === 403) {
         lastError = new Error(`HTTP ${response.status}`);
         await logStep('backoff', 'failed', `Rate/Forbidden; backoff attempt ${attempt}`);
-        await sleep(1000 * attempt + randInt(200, 800));
+        const base = Math.pow(2, attempt) * 1000;
+        const jitter = randInt(200, 800);
+        await sleep(base + jitter);
         let refreshed = tokens;
         try { const t = await fetchSessionTokens(cookie, agent, acceptLanguage, userAgent); if (t) refreshed = t; } catch {}
         const formData2 = buildGraphQLFormData(cookie, variables, refreshed);
@@ -841,7 +871,8 @@ export async function processJob(data: JobData, job?: Job) {
 
       if (isConfirmedSuccess(parsed)) break;
 
-      await sleep(300 + randInt(100, 400));
+      const base = 300 + randInt(100, 400);
+      await sleep(base);
     }
 
     await results.updateOne(
@@ -853,7 +884,7 @@ export async function processJob(data: JobData, job?: Job) {
             cardId: (cardDoc as any)._id || (data as any).cardId,
             serverId: data.serverId || null,
             success: (response?.status >= 200 && response?.status < 400 && isConfirmedSuccess(parsed)) || pendingVerification,
-            reason: pendingVerification ? 'Pending verification' : (isConfirmedSuccess(parsed) ? 'Card add attempt finished' : ((parsed as any)?.errors?.[0]?.message || lastError?.message || 'Not confirmed')),
+            reason: pendingVerification ? 'PENDING_VERIFICATION: Card addition pending manual verification' : (isConfirmedSuccess(parsed) ? 'Card add attempt finished' : ((parsed as any)?.errors?.[0]?.message || lastError?.message || 'Not confirmed')),
             country: (card as any).country || (cookie as any).country || null,
             response: parsed,
             pendingVerification,

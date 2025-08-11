@@ -19,6 +19,8 @@ const schema = z.object({
   FB_ACCEPT_LANGUAGE: z.string().optional().default('en-US,en;q=0.9'),
   ASBD_ID: z.string().optional().default('129477'),
   FB_UPDATE_ACCOUNT_DOC_ID: z.string().optional(),
+  // New: enforce E2EE availability; if true and public key missing, fail early
+  ENFORCE_E2EE: z.coerce.boolean().optional().default(false),
 });
 
 export type Env = z.infer<typeof schema>;
