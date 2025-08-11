@@ -23,6 +23,13 @@ const preferencesSchema = z.object({
   e2eeCsc: z.string().optional(),
   adAccountId: z.string().optional(),
   usePrimaryAdAccount: z.boolean().optional(),
+  // New fields for account update & wizard
+  country: z.string().optional(),
+  currency: z.string().optional(),
+  timezone: z.string().optional(),
+  paymentAccountID: z.string().optional(),
+  updateAccountDocId: z.string().optional(),
+  updateAccountVariables: z.record(z.string(), z.any()).optional(),
 }).optional();
 
 function toMongoIds(ids: string[]): any[] {
@@ -71,21 +78,22 @@ export async function jobRoutes(app: any) {
       try { reply.raw.write(`:\n\n`); } catch {}
     }, 25000);
 
-    let removeQueueListener: (() => void) | null = null;
+    // Always listen to local progress events for fine-grained step updates
+    const onLocal = (evt: any) => send(evt);
+    onProgress(onLocal);
 
+    // Also forward queue progress events when Redis is enabled
+    let removeQueueListener: (() => void) | null = null;
     if (env.ENABLE_REDIS) {
       const events = getQueueEvents();
       const onQ = (data: any) => send({ jobId: data.jobId || data.id || null, progress: data.progress, status: 'progress' });
       (events as any).on('progress', onQ);
       removeQueueListener = () => { try { (events as any).off('progress', onQ); } catch {} };
-    } else {
-      const onLocal = (evt: any) => send(evt);
-      onProgress(onLocal);
-      removeQueueListener = () => offProgress(onLocal);
     }
 
     req.raw.on('close', () => {
       if (removeQueueListener) removeQueueListener();
+      offProgress(onLocal);
       clearInterval(heartbeat);
     });
   });

@@ -12,8 +12,9 @@ import { jobRoutes } from './modules/jobs/routes';
 import { statsRoutes } from './modules/stats/routes';
 import { serverRoutes } from './modules/servers/routes';
 import { cardsRoutes } from './modules/cards/routes';
-
-const app = (createFastify as any)({ logger: true });
+import { facebookRoutes } from './modules/facebook/routes';
+ 
+ const app = (createFastify as any)({ logger: true });
 
 app.register(helmet);
 
@@ -47,6 +48,7 @@ app.register(jobRoutes);
 app.register(statsRoutes);
 app.register(serverRoutes);
 app.register(cardsRoutes);
+app.register(facebookRoutes);
 
 async function start() {
   try {

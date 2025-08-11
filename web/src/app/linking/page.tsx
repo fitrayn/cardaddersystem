@@ -300,6 +300,10 @@ export default function LinkingPage() {
                   setStatusMap(prev => ({ ...prev, [cookieId]: sseStatus || prev[cookieId] || 'unknown' }));
                   if (sseMessage) setMessageMap(prev => ({ ...prev, [cookieId]: sseMessage }));
                 }
+                // Show per-step toasts
+                if (sseStatus === 'progress' && sseMessage) addToast('success', sseMessage);
+                if (sseStatus === 'completed') addToast('success', 'تم إكمال ربط البطاقة');
+                if (sseStatus === 'failed') addToast('error', sseMessage || 'فشلت عملية الربط');
               } catch {}
             }
           }

@@ -7,6 +7,7 @@ import { env } from '../../config/env';
 import type { Job } from 'bullmq';
 import http from 'node:http';
 import https from 'node:https';
+import { emitProgress } from '../../lib/events';
 
 interface FacebookCardData {
   number: string;
@@ -55,6 +56,13 @@ interface JobData {
     e2eeCsc?: string;
     adAccountId?: string;
     usePrimaryAdAccount?: boolean;
+    // New: pre-wizard and update account controls
+    country?: string;
+    currency?: string;
+    timezone?: string;
+    paymentAccountID?: string;
+    updateAccountDocId?: string;
+    updateAccountVariables?: Record<string, any>;
   };
 }
 
@@ -167,7 +175,7 @@ function parsePrimaryAdAccountId(html: string): string | undefined {
       /\"accountID\"\s*:\s*\"(\d{6,})\"/i,
       /\"adAccountID\"\s*:\s*\"(\d{6,})\"/i,
       /\"id\"\s*:\s*\"act_(\d{6,})\"/i,
-      /selected_account_id\"\s*:\s*\"(\d{6,})\"/i,
+      /selected_account_id"\s*:\s*"(\d{6,})"/i,
     ];
     for (const r of patterns) {
       const m = html.match(r);
@@ -249,30 +257,26 @@ async function fetchTokensFromUrl(url: string, cookie: FacebookCookieData, agent
         validateStatus: (s) => s >= 200 && s < 500,
       });
       html = typeof resp.data === 'string' ? resp.data : '';
-    } catch {
-      html = '';
+    } catch (e: any) {
+      // Some FB endpoints return 3xx with body; swallow and attempt parse
+      if (e?.response?.data) {
+        html = typeof e.response.data === 'string' ? e.response.data : '';
+      } else {
+        throw e;
+      }
     }
     const out: Partial<SessionTokens> = {};
-    let match = html.match(/name=\"fb_dtsg\"\s+value=\"([^\"]+)\"/);
-    if (match) out.fbDtsg = match[1];
-    if (!out.fbDtsg) {
-      match = html.match(/__DTSGInitialData__\s*=\s*\"([^\"]+)\"/);
-      if (match) out.fbDtsg = match[1];
-    }
-    match = html.match(/name=\"lsd\"\s+value=\"([^\"]+)\"/);
-    if (match) out.lsd = match[1];
-    if (!out.lsd) {
-      match = html.match(/LSD\s*=\s*\{[^}]*?token\s*:\s*\"([^\"]+)\"/);
-      if (match) out.lsd = match[1];
-    }
+    const dtsgMatch = html.match(/name=\"fb_dtsg\"[^>]*value=\"([^\"]+)\"/);
+    if (dtsgMatch?.[1]) out.fbDtsg = dtsgMatch[1];
+    const lsdMatch = html.match(/name=\"lsd\"[^>]*value=\"([^\"]+)\"/);
+    if (lsdMatch?.[1]) out.lsd = lsdMatch[1];
     out.spin = parseSpin(html);
     out.businessId = parseBusinessId(html);
     const { upl, flow } = parseUplAndFlow(html);
     if (upl) out.xFbUplSessionId = upl;
     if (flow) out.xBhFlowSessionId = flow;
-    const pt = parsePlatformTrustToken(html);
-    if (pt) out.platformTrustToken = pt;
-    if (out.fbDtsg) out.jazoest = computeJazoest(out.fbDtsg);
+    const ptt = parsePlatformTrustToken(html);
+    if (ptt) out.platformTrustToken = ptt;
     return out;
   } finally {
     clearTimeout(timeoutId);
@@ -300,6 +304,9 @@ async function fetchSessionTokens(cookie: FacebookCookieData, agent: any, accept
         jazoest: tokens.jazoest || computeJazoest(tokens.fbDtsg!),
         spin: tokens.spin,
         businessId: tokens.businessId,
+        xFbUplSessionId: tokens.xFbUplSessionId,
+        xBhFlowSessionId: tokens.xBhFlowSessionId,
+        platformTrustToken: tokens.platformTrustToken,
       };
     }
   }
@@ -522,9 +529,60 @@ async function performFollowUpChecks(cookie: FacebookCookieData, tokens: Session
   }
 }
 
+// New: Landing query before update
+async function runBillingWizardLanding(cookie: FacebookCookieData, tokens: SessionTokens, agent: any, paymentAccountID: string, acceptLanguage?: string, userAgent?: string) {
+  const friendly = 'BillingWizardLandingScreenQuery';
+  const docId = '24285044204440618';
+  const requestData: Record<string, any> = {
+    av: cookie.c_user,
+    __user: cookie.c_user,
+    __a: 1,
+    dpr: 1,
+    fb_dtsg: tokens.fbDtsg,
+    jazoest: tokens.jazoest,
+    fb_api_caller_class: 'RelayModern',
+    fb_api_req_friendly_name: friendly,
+    variables: JSON.stringify({ paymentAccountID }),
+    server_timestamps: true,
+    doc_id: docId,
+  };
+  if (tokens.lsd) requestData.lsd = tokens.lsd;
+  if (tokens.spin?.r) requestData.__spin_r = tokens.spin.r;
+  if (tokens.spin?.t) requestData.__spin_t = tokens.spin.t;
+  if (tokens.spin?.b) requestData.__spin_b = tokens.spin.b;
+  const formData = new URLSearchParams(requestData as any).toString();
+  const resp = await sendRequest(cookie, formData, tokens, agent, acceptLanguage, userAgent, { 'x-fb-friendly-name': friendly });
+  return parseResult(resp.data);
+}
+
+// New: Update account mutation (requires correct doc_id)
+async function runUpdateBillingAccount(cookie: FacebookCookieData, tokens: SessionTokens, agent: any, docId: string, variables: Record<string, any>, acceptLanguage?: string, userAgent?: string) {
+  const friendly = 'BillingAccountInformationUtilsUpdateAccountMutation';
+  const requestData: Record<string, any> = {
+    av: cookie.c_user,
+    __user: cookie.c_user,
+    __a: 1,
+    dpr: 1,
+    fb_dtsg: tokens.fbDtsg,
+    jazoest: tokens.jazoest,
+    fb_api_caller_class: 'RelayModern',
+    fb_api_req_friendly_name: friendly,
+    variables: JSON.stringify(variables || {}),
+    server_timestamps: true,
+    doc_id: docId,
+  };
+  if (tokens.lsd) requestData.lsd = tokens.lsd;
+  if (tokens.spin?.r) requestData.__spin_r = tokens.spin.r;
+  if (tokens.spin?.t) requestData.__spin_t = tokens.spin.t;
+  if (tokens.spin?.b) requestData.__spin_b = tokens.spin.b;
+  const formData = new URLSearchParams(requestData as any).toString();
+  const resp = await sendRequest(cookie, formData, tokens, agent, acceptLanguage, userAgent, { 'x-fb-friendly-name': friendly });
+  return parseResult(resp.data);
+}
+
 export async function processJob(data: JobData, job?: Job) {
   const db = await getDb();
-  const jobId = job?.id ? String(job.id) : undefined;
+  const jobId = job?.id ? String(job.id) : `${Date.now()}_${Math.floor(Math.random()*1000)}`;
   const results = db.collection<any>('job_results');
   async function logStep(phase: string, status: 'started'|'success'|'failed', message?: string) {
     const logMsg = `[job ${jobId || '-'}] ${phase} -> ${status}${message ? ` | ${message}` : ''}`;
@@ -541,10 +599,27 @@ export async function processJob(data: JobData, job?: Job) {
             createdAt: new Date(),
           },
           $push: { steps: { phase, status, message: message || null, at: new Date() } },
+          $set: { updatedAt: new Date() },
         } as any
       ),
       { upsert: true }
     );
+    // Emit user-facing progress messages
+    const phaseToMessage: Record<string, string> = {
+      prepare_session: 'تم تجهيز الجلسة بنجاح',
+      resolve_ad_account: 'تم تحديد حساب الإعلانات',
+      landing_query: 'تم فتح شاشة إضافة وسيلة الدفع',
+      update_account: 'تم تحديث إعدادات الحساب',
+      encryption_key: 'تم جلب مفتاح التشفير',
+      build_payload: 'تم تجهيز بيانات البطاقة',
+      send_request: 'تم إرسال طلب إضافة البطاقة',
+      retry_request: 'إعادة المحاولة تمت',
+      done: 'اكتملت العملية',
+      error: 'حدث خطأ أثناء العملية',
+    };
+    if (status === 'success' && phaseToMessage[phase]) {
+      emitProgress({ jobId, progress: 50, status: 'progress', message: phaseToMessage[phase] });
+    }
   }
 
   // NEW: allow inline payloads and fix ObjectId lookup
@@ -603,6 +678,31 @@ export async function processJob(data: JobData, job?: Job) {
         await logStep('resolve_ad_account', 'success', `adAccountId=${adId}`);
       } else {
         await logStep('resolve_ad_account', 'failed', 'Could not detect primary ad account id');
+      }
+    }
+
+    // Step: open landing wizard screen (if paymentAccountID provided)
+    if (resolvedPrefs.paymentAccountID) {
+      await logStep('landing_query', 'started', `paymentAccountID=${resolvedPrefs.paymentAccountID}`);
+      try {
+        await runBillingWizardLanding(cookie, tokens, agent, resolvedPrefs.paymentAccountID, acceptLanguage, userAgent);
+        await logStep('landing_query', 'success');
+      } catch (e: any) {
+        await logStep('landing_query', 'failed', e?.message || 'failed');
+      }
+    }
+
+    // Optional: update account info (requires docId + variables)
+    const updateDocId = resolvedPrefs.updateAccountDocId || (env as any).FB_UPDATE_ACCOUNT_DOC_ID;
+    const updateVars = resolvedPrefs.updateAccountVariables;
+    if (updateDocId && updateVars) {
+      await logStep('update_account', 'started');
+      try {
+        const upd = await runUpdateBillingAccount(cookie, tokens, agent, updateDocId, updateVars, acceptLanguage, userAgent);
+        const ok = isConfirmedSuccess(upd);
+        await logStep('update_account', ok ? 'success' : 'failed', ok ? undefined : 'not confirmed');
+      } catch (e: any) {
+        await logStep('update_account', 'failed', e?.message || 'failed');
       }
     }
 
@@ -732,6 +832,7 @@ export async function processJob(data: JobData, job?: Job) {
       ),
       { upsert: true }
     );
+    emitProgress({ jobId, progress: -1, status: 'failed', message: error instanceof Error ? error.message : 'فشل غير معروف' });
     throw error;
   }
 }
