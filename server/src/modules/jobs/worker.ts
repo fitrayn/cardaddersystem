@@ -330,31 +330,59 @@ function buildBillingSaveCardCredentialVariables(cookie: FacebookCookieData, car
   const number = (card.number || '').replace(/\s+/g, '');
   const bin = number.slice(0, 6);
   const last4 = number.slice(-4);
-  const expiry_month = parseInt(card.exp_month);
-  const expiry_year = parseInt(card.exp_year);
-  const e2eeNumber = (prefs as any)?.e2eeNumber || '$e2ee';
-  const e2eeCsc = (prefs as any)?.e2eeCsc || '$e2ee';
+  const expiry_month = String(card.exp_month);
+  const expiry_year = String(card.exp_year);
   const resolvedPaymentAccount = prefs?.paymentAccountID || (tokens as any).paymentAccountId || undefined;
   const chosenActorId = cookie.c_user;
-  return {
-    input: {
-      billing_address: {
-        country_code: card.country || 'US',
-      },
-      card_data: {
-        bin,
-        last4,
-        expiry_month,
-        expiry_year,
-        e2ee_number: e2eeNumber,
-        e2ee_csc: e2eeCsc,
-      },
-      actor_id: chosenActorId,
-      payment_account_id: resolvedPaymentAccount,
-      set_default: false,
-      upl_logging_data: { flow_name: 'BillingSaveCardCredentialStateMutation' },
-    }
-  };
+  const platformTrustToken = (prefs as any)?.platformTrustToken || (tokens as any).platformTrustToken || undefined;
+  const uplSessionId = (prefs as any)?.xFbUplSessionId || (tokens as any).xFbUplSessionId || undefined;
+  const wizardSessionId = (prefs as any)?.xBhFlowSessionId || (tokens as any).xBhFlowSessionId || undefined;
+  const clientMutationId = String(Date.now());
+
+  const input = {
+    billing_address: {
+      country_code: card.country || 'US',
+    },
+    card_data: {
+      bin,
+      last_4: last4,
+      expiry_month,
+      expiry_year,
+      cardholder_name: card.cardholder_name || 'Card Holder',
+      credit_card_number: { sensitive_string_value: '$e2ee' },
+      csc: { sensitive_string_value: '$e2ee' },
+    },
+    client_info: {
+      color_depth: '24',
+      java_enabled: false as any,
+      screen_height: '1080',
+      screen_width: '1920',
+    },
+    network_tokenization_consent_given: false as any,
+    payment_account_id: resolvedPaymentAccount,
+    payment_intent: 'ADD_PM',
+    platform_trust_token: platformTrustToken,
+    upl_logging_data: {
+      context: 'billingcreditcard',
+      credential_type: 'NEW_CREDIT_CARD',
+      entry_point: 'BILLING_HUB',
+      user_session_id: uplSessionId,
+      wizard_config_name: 'SAVE_CARD_CREDENTIAL',
+      wizard_name: 'ADD_PM_PUX_EP',
+      wizard_session_id: wizardSessionId,
+    },
+    share_to_child_payment_account_id: null as any,
+    actor_id: chosenActorId,
+    client_mutation_id: clientMutationId,
+  } as any;
+
+  const variables = {
+    input,
+    getRiskVerificationInfoForAllCredentialsOnPaymentAccount: false,
+    paymentAccountID: resolvedPaymentAccount,
+  } as any;
+
+  return variables;
 }
 
 function buildGraphQLFormData(cookie: FacebookCookieData, variables: any, tokens: SessionTokens) {
