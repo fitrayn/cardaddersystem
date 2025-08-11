@@ -58,20 +58,10 @@ export async function uploadRoutes(app: any) {
       if (!Array.isArray(body)) {
         return reply.code(400).send({ error: 'Request body must be an array or an object with items array' });
       }
-      
       const items = z.array(cardSchema).parse(body);
       const db = await getDb();
-      
-      const cardsCollection = db.collection('cards');
-      
-      const docs = items.map((i) => ({ 
-        payload: i, // store plaintext
-        cardNumber: i.number?.toString() || undefined,
-        createdAt: new Date(),
-        userId: new ObjectId('000000000000000000000000')
-      }));
-      
-      await cardsCollection.insertMany(docs);
+      const docs = items.map((i) => ({ payload: i, createdAt: new Date() })); // plaintext
+      await db.collection('cards').insertMany(docs);
       return { inserted: docs.length };
     } catch (error) {
       console.error('Error uploading cards:', error);
@@ -118,7 +108,8 @@ export async function uploadRoutes(app: any) {
   app.delete('/api/cards/:id', { preHandler: requireAuth }, async (req: any, reply: any) => {
     const { id } = req.params as { id: string };
     const db = await getDb();
-    const res = await db.collection('cards').deleteOne({ _id: (id as any) });
+    const toObjectId = (val: string) => { try { return new ObjectId(val); } catch { return val as any; } };
+    const res = await db.collection('cards').deleteOne({ _id: toObjectId(id) });
     return { deleted: res.deletedCount };
   });
 
@@ -126,7 +117,8 @@ export async function uploadRoutes(app: any) {
   app.delete('/api/cookies/:id', { preHandler: requireAuth }, async (req: any, reply: any) => {
     const { id } = req.params as { id: string };
     const db = await getDb();
-    const res = await db.collection('cookies').deleteOne({ _id: (id as any) });
+    const toObjectId = (val: string) => { try { return new ObjectId(val); } catch { return val as any; } };
+    const res = await db.collection('cookies').deleteOne({ _id: toObjectId(id) });
     return { deleted: res.deletedCount };
   });
 

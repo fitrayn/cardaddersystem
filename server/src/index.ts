@@ -13,8 +13,8 @@ import { statsRoutes } from './modules/stats/routes';
 import { serverRoutes } from './modules/servers/routes';
 import { cardsRoutes } from './modules/cards/routes';
 import { facebookRoutes } from './modules/facebook/routes';
- 
- const app = (createFastify as any)({ logger: true });
+
+const app = (createFastify as any)({ logger: true });
 
 app.register(helmet);
 
