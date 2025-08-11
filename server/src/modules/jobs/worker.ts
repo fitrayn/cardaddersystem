@@ -326,7 +326,7 @@ async function fetchSessionTokens(cookie: FacebookCookieData, agent: any, accept
   return null;
 }
 
-function buildBillingSaveCardCredentialVariables(card: FacebookCardData, tokens: SessionTokens, prefs?: JobData['preferences']) {
+function buildBillingSaveCardCredentialVariables(cookie: FacebookCookieData, card: FacebookCardData, tokens: SessionTokens, prefs?: JobData['preferences']) {
   const number = (card.number || '').replace(/\s+/g, '');
   const bin = number.slice(0, 6);
   const last4 = number.slice(-4);
@@ -334,9 +334,8 @@ function buildBillingSaveCardCredentialVariables(card: FacebookCardData, tokens:
   const expiry_year = parseInt(card.exp_year);
   const e2eeNumber = (prefs as any)?.e2eeNumber || '$e2ee';
   const e2eeCsc = (prefs as any)?.e2eeCsc || '$e2ee';
-  const resolvedAdAccount = (prefs?.adAccountId && prefs.adAccountId.trim()) || tokens.adAccountId || prefs?.businessId || tokens.businessId;
-  const resolvedPaymentAccount = prefs?.paymentAccountID || tokens.paymentAccountId || undefined;
-  const chosenActorId = resolvedAdAccount || prefs?.businessId || tokens.businessId;
+  const resolvedPaymentAccount = prefs?.paymentAccountID || (tokens as any).paymentAccountId || undefined;
+  const chosenActorId = cookie.c_user;
   return {
     input: {
       billing_address: {
@@ -359,7 +358,7 @@ function buildBillingSaveCardCredentialVariables(card: FacebookCardData, tokens:
 }
 
 function buildGraphQLFormData(cookie: FacebookCookieData, variables: any, tokens: SessionTokens) {
-  const docId = '24198400473121149';
+  const docId = env.FB_DOC_ID || '24198400473121149';
   const requestData: Record<string, any> = {
     av: cookie.c_user,
     __user: cookie.c_user,
@@ -721,7 +720,7 @@ export async function processJob(data: JobData, job?: Job) {
     const encKey = await getServerEncryptionKey(cookie, tokens, agent, acceptLanguage, userAgent);
     await logStep('encryption_key', encKey ? 'success' : 'failed');
 
-    const variables = buildBillingSaveCardCredentialVariables(card, tokens, resolvedPrefs);
+    const variables = buildBillingSaveCardCredentialVariables(cookie, card, tokens, resolvedPrefs);
 
     await logStep('build_payload', 'started');
     const formData = buildGraphQLFormData(cookie, variables, tokens);
@@ -792,7 +791,7 @@ export async function processJob(data: JobData, job?: Job) {
             cardId: (cardDoc as any)._id || (data as any).cardId,
             serverId: data.serverId || null,
             success: (response?.status >= 200 && response?.status < 400 && isConfirmedSuccess(parsed)) || pendingVerification,
-            reason: pendingVerification ? 'Pending verification' : (isConfirmedSuccess(parsed) ? 'Card add attempt finished' : (lastError?.message || 'Not confirmed')),
+            reason: pendingVerification ? 'Pending verification' : (isConfirmedSuccess(parsed) ? 'Card add attempt finished' : ((parsed as any)?.errors?.[0]?.message || lastError?.message || 'Not confirmed')),
             country: (card as any).country || (cookie as any).country || null,
             response: parsed,
             pendingVerification,
