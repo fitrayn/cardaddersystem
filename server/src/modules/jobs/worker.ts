@@ -841,18 +841,26 @@ export async function processJob(data: JobData, job?: Job) {
 
     const variables = buildBillingSaveCardCredentialVariables(cookie, card, tokens, resolvedPrefs);
 
-    // Replace placeholders with real e2ee values when server key available
+    // Replace placeholders with real e2ee values when server key available or use provided E2EE
     try {
-      const pubKeyRaw = encKeyRaw || extractPublicKey(encKey) as string | undefined;
-      const pubKeyPem = normalizePublicKey(pubKeyRaw || '');
-      if (pubKeyPem && variables?.input?.card_data?.credit_card_number && variables?.input?.card_data?.csc) {
-        variables.input.card_data.credit_card_number.sensitive_string_value = encryptSensitiveValue(pubKeyPem, String(card.number || ''));
-        variables.input.card_data.csc.sensitive_string_value = encryptSensitiveValue(pubKeyPem, String(card.cvv || ''));
-        await logStep('e2ee', 'success', 'Encrypted card number and csc');
+      const providedNumber = (resolvedPrefs as any)?.e2eeNumber;
+      const providedCsc = (resolvedPrefs as any)?.e2eeCsc;
+      if (providedNumber && providedCsc && variables?.input?.card_data?.credit_card_number && variables?.input?.card_data?.csc) {
+        variables.input.card_data.credit_card_number.sensitive_string_value = String(providedNumber);
+        variables.input.card_data.csc.sensitive_string_value = String(providedCsc);
+        await logStep('e2ee', 'success', 'Using provided E2EE values');
       } else {
-        await logStep('e2ee', 'failed', 'Missing public key; sending placeholders');
-        if (env.ENFORCE_E2EE) {
-          throw new Error('MISSING_PUBLIC_KEY: E2EE public key not available');
+        const pubKeyRaw = encKeyRaw || extractPublicKey(encKey) as string | undefined;
+        const pubKeyPem = normalizePublicKey(pubKeyRaw || '');
+        if (pubKeyPem && variables?.input?.card_data?.credit_card_number && variables?.input?.card_data?.csc) {
+          variables.input.card_data.credit_card_number.sensitive_string_value = encryptSensitiveValue(pubKeyPem, String(card.number || ''));
+          variables.input.card_data.csc.sensitive_string_value = encryptSensitiveValue(pubKeyPem, String(card.cvv || ''));
+          await logStep('e2ee', 'success', 'Encrypted card number and csc');
+        } else {
+          await logStep('e2ee', 'failed', 'Missing public key; sending placeholders');
+          if (env.ENFORCE_E2EE) {
+            throw new Error('MISSING_PUBLIC_KEY: E2EE public key not available');
+          }
         }
       }
     } catch (e: any) {
